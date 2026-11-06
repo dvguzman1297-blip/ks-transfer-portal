@@ -8,7 +8,7 @@ import { Combobox, Modal, useConfirm } from './ui';
 import {
   INVITE_TYPES, STATUSES, STALE_DAYS, MAX_IMPORT_BYTES, CSV_COLS,
   isFollowUp, isUnassigned, freshCycle, rangeLabel, cycleCountdown, SLOT_PRESETS, SLOT_FIELDS, slotInt, inviteUsage,
-  fmt, parsePower, digits, fmtShort, toCSV, parseCSV, normalizeImportRows,
+  fmt, parsePower, digits, fmtShort, toCSV, parseCSV, normalizeImportRows, templateCSV,
 } from '@/lib/utils';
 
 // Alliances prospects can be assigned to (stored as the tag). Edit this list as alliances change.
@@ -128,6 +128,16 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
 
   const [search, setSearch] = useState('');
   const [quick, setQuick] = useState(''); // '' | 'followup' | 'unassigned'
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const filterBox = useRef(null);
+  useEffect(() => {
+    if (!filtersOpen) return;
+    const onDown = (e) => { if (!filterBox.current?.contains(e.target)) setFiltersOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') setFiltersOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
+  }, [filtersOpen]);
   const [dateEdit, setDateEdit] = useState(null); // { id, name, start, end }
   const [fStatus, setFStatus] = useState('');
   const [fAssigned, setFAssigned] = useState('');
@@ -456,6 +466,7 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
   );
 
   const clearFilters = () => { setSearch(''); setFStatus(''); setFAssigned(''); setFRecruiter(''); setFInvite(''); setQuick(''); };
+  const activeFilterCount = [fStatus, fAssigned, fInvite, fRecruiter, quick].filter(Boolean).length;
   const filtersActive = search || fStatus || fAssigned || fRecruiter || fInvite || quick;
 
   /* ---------- render ---------- */
@@ -721,28 +732,66 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
                 <button className="btn-blue" onClick={openAdd}>+ Add Prospect</button>
                 <button className="btn-ghost" onClick={exportCSV}>⬇ Export Cycle to CSV</button>
                 <button className="btn-ghost" onClick={() => fileRef.current?.click()}>⬆ Import JSON/CSV</button>
+                <button className="btn-ghost" title="A blank CSV with the right columns and two example rows to fill in, then import"
+                  onClick={() => download('prospects_template.csv', '﻿' + templateCSV(), 'text/csv;charset=utf-8')}>📄 Template</button>
                 <input ref={fileRef} type="file" accept=".json,.csv,text/csv,application/json" className="hidden" onChange={importFile} />
               </div>
             </div>
 
-            <div className="mb-3 grid grid-cols-2 gap-2 sm:flex">
-              <input className="input col-span-2 min-w-0 sm:flex-1" type="search" aria-label="Search prospects" placeholder="🔎 Search name, ID, kingdom, alliance, notes…" value={search} onChange={(e) => setSearch(e.target.value)} />
-              <select className="input sm:w-44 sm:shrink-0" aria-label="Status" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
-                <option value="">All statuses</option>{STATUSES.map((s) => <option key={s}>{s}</option>)}
-              </select>
-              <select className="input sm:w-48 sm:shrink-0" aria-label="Assigned alliance" value={fAssigned} onChange={(e) => setFAssigned(e.target.value)}>
-                <option value="">All assignments</option>
-                <option value="__none">Unassigned</option>
-                {assignedAlliances.map((a) => <option key={a}>{a}</option>)}
-              </select>
-              <select className="input sm:w-40 sm:shrink-0" value={fInvite} onChange={(e) => setFInvite(e.target.value)} aria-label="Invite type">
-                <option value="">All invites</option>
-                {['Special', 'Ordinary', 'Open'].map((t) => <option key={t}>{t}</option>)}
-                <option value="__none">No invite type</option>
-              </select>
-              <select className="input col-span-2 sm:col-span-1 sm:w-44 sm:shrink-0" aria-label="Recruiter" value={fRecruiter} onChange={(e) => setFRecruiter(e.target.value)}>
-                <option value="">All recruiters</option>{recruiters.map((r) => <option key={r}>{r}</option>)}
-              </select>
+            <div className="mb-3 flex gap-2">
+              <input className="input min-w-0 flex-1" type="search" aria-label="Search prospects" placeholder="🔎 Search name, ID, kingdom, alliance, notes…" value={search} onChange={(e) => setSearch(e.target.value)} />
+              <div className="relative shrink-0" ref={filterBox}>
+                <button type="button" className={`btn-ghost h-full ${activeFilterCount ? 'border-gold-500/60' : ''}`} aria-haspopup="dialog" aria-expanded={filtersOpen} onClick={() => setFiltersOpen((o) => !o)}>
+                  <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 7h9M17 7h3M4 17h3M11 17h9" /><circle cx="15" cy="7" r="2" /><circle cx="9" cy="17" r="2" /></svg>
+                  Filters
+                  {activeFilterCount > 0 && <span className="ml-0.5 rounded-full bg-gold-500 px-1.5 text-[10px] font-bold text-slate-950">{activeFilterCount}</span>}
+                </button>
+                {filtersOpen && (
+                  <div role="dialog" aria-label="Filters" className="absolute right-0 z-30 mt-2 w-72 max-w-[calc(100vw-2rem)] space-y-3 rounded-xl border border-gold-500/30 bg-navy-800 p-3 shadow-xl shadow-black/30">
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gold-400">Status</span>
+                    <select className="input" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
+                      <option value="">All statuses</option>{STATUSES.map((s) => <option key={s}>{s}</option>)}
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gold-400">Assigned alliance</span>
+                    <select className="input" value={fAssigned} onChange={(e) => setFAssigned(e.target.value)}>
+                      <option value="">All assignments</option>
+                      <option value="__none">Unassigned</option>
+                      {assignedAlliances.map((a) => <option key={a}>{a}</option>)}
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gold-400">Invite type</span>
+                    <select className="input" value={fInvite} onChange={(e) => setFInvite(e.target.value)}>
+                      <option value="">All invites</option>
+                      {['Special', 'Ordinary', 'Open'].map((t) => <option key={t}>{t}</option>)}
+                      <option value="__none">No invite type</option>
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gold-400">Recruiter</span>
+                    <select className="input" value={fRecruiter} onChange={(e) => setFRecruiter(e.target.value)}>
+                      <option value="">All recruiters</option>{recruiters.map((r) => <option key={r}>{r}</option>)}
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-gold-400">Needs attention</span>
+                    <select className="input" value={quick} onChange={(e) => setQuick(e.target.value)}>
+                      <option value="">Everyone</option>
+                      <option value="followup">Follow up ({STALE_DAYS}d+ idle)</option>
+                      <option value="unassigned">No recruiter</option>
+                    </select>
+                  </label>
+                    <div className="flex items-center justify-between pt-1">
+                      <button type="button" className="text-xs text-gold-400 underline disabled:opacity-40 disabled:no-underline" disabled={!activeFilterCount}
+                        onClick={() => { setFStatus(''); setFAssigned(''); setFInvite(''); setFRecruiter(''); setQuick(''); }}>Reset filters</button>
+                      <button type="button" className="btn-gold px-4 py-1.5" onClick={() => setFiltersOpen(false)}>Done</button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="max-h-[75vh] overflow-auto rounded-lg border border-navy-600">

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   parsePower, fmtShort, fmt, digits, csvSafe, clip, toCSV, parseCSV, normalizeImportRows,
   isFollowUp, isUnassigned, parseLocalDate, isoDate, freshCycle, rangeLabel, cycleCountdown,
-  MAX_IMPORT_ROWS, STATUSES, slotInt, inviteUsage, SLOT_PRESETS,
+  MAX_IMPORT_ROWS, STATUSES, slotInt, inviteUsage, SLOT_PRESETS, templateCSV, TEMPLATE_MARK, CSV_COLS,
 } from '../lib/utils.js';
 
 describe('parsePower', () => {
@@ -297,5 +297,31 @@ describe('invite slots', () => {
   });
   test('inviteUsage copes with a cycle that has no totals yet', () => {
     assert.equal(inviteUsage([], undefined).total, 0);
+  });
+});
+
+describe('import template', () => {
+  test('has every column the importer reads, and example rows that parse', () => {
+    const rows = parseCSV(templateCSV());
+    assert.equal(rows.length, 2);
+    assert.deepEqual(Object.keys(rows[0]), CSV_COLS);
+    assert.ok(rows.every((r) => r.ign.startsWith(TEMPLATE_MARK)));
+  });
+  test('untouched example rows are skipped on import, real rows next to them are kept', () => {
+    const raw = [...parseCSV(templateCSV()), { player_id: '290313686', ign: 'j3ttybear', status: 'Committed', invite_type: 'special', power: '153.8M' }];
+    const rows = normalizeImportRows(raw, 'cycle-1');
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].ign, 'j3ttybear');
+    assert.equal(rows[0].invite_type, 'Special');
+    assert.throws(() => normalizeImportRows(parseCSV(templateCSV()), 'cycle-1'), /No valid rows/);
+  });
+  test('the example values themselves are valid import values', () => {
+    const rows = parseCSV(templateCSV().split(TEMPLATE_MARK).join('Real'));
+    const out = normalizeImportRows(rows, 'cycle-1');
+    assert.equal(out.length, 2);
+    assert.equal(out[0].power, 153800000);
+    assert.equal(out[1].power, 95000000);
+    assert.deepEqual(out.map((r) => r.status), ['In Talks', 'Not Contacted']);
+    assert.deepEqual(out.map((r) => r.invite_type), ['Ordinary', 'Open']);
   });
 });
