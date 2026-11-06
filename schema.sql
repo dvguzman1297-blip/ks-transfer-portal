@@ -33,6 +33,9 @@ create table if not exists kstransfers.prospects (
 
 -- Columns added in later versions (for databases created from an older schema)
 alter table kstransfers.cycles add column if not exists end_date date;
+alter table kstransfers.cycles add column if not exists ordinary_slots integer not null default 0;
+alter table kstransfers.cycles add column if not exists special_slots integer not null default 0;
+alter table kstransfers.cycles add column if not exists open_slots integer not null default 0;
 alter table kstransfers.prospects add column if not exists alliance text;
 alter table kstransfers.prospects add column if not exists truegold_grade text;
 
@@ -172,8 +175,10 @@ create table if not exists kstransfers.members (
   email text not null,
   role text not null default 'pending' check (role in ('admin', 'member', 'pending')),
   created_at timestamptz not null default now(),
-  approved_at timestamptz
+  approved_at timestamptz,
+  display_name text
 );
+alter table kstransfers.members add column if not exists display_name text;
 
 create or replace function kstransfers.is_approved() returns boolean
 language sql stable security definer set search_path = '' as $$
@@ -240,7 +245,10 @@ declare
   cname text;
   label text;
 begin
-  who := nullif(auth.jwt() ->> 'email', '');
+  -- The actor is the signed-in user's chosen display name (their verified email if they have none yet)
+  select coalesce(nullif(btrim(m.display_name), ''), nullif(auth.jwt() ->> 'email', ''))
+    into who from kstransfers.members m where m.user_id = auth.uid();
+  if who is null then who := nullif(auth.jwt() ->> 'email', ''); end if;
 
   if tg_op = 'INSERT' then
     new_j := to_jsonb(new);
@@ -269,7 +277,7 @@ begin
     label := rec ->> 'ign';
   elsif tg_table_name = 'members' then
     rid := (rec ->> 'user_id')::uuid;
-    label := rec ->> 'email';
+    label := coalesce(nullif(rec ->> 'display_name', ''), rec ->> 'email');
   else
     rid := (rec ->> 'id')::uuid;
     cyc := rid;
@@ -298,6 +306,53 @@ revoke all on function kstransfers.is_admin() from public, anon;
 grant execute on function kstransfers.request_access(), kstransfers.is_approved(), kstransfers.is_admin()
   to authenticated;
 
+-- Display names and the members list
+-- (safe to re-run)
+create unique index if not exists members_display_name_key on kstransfers.members (lower(display_name)) where display_name is not null;
+
+-- A signed-in user sets or changes their own name (the table itself stays admin-only for edits)
+create or replace function kstransfers.set_display_name(new_name text) returns void
+language plpgsql security definer set search_path = '' as $
+declare
+  n text;
+begin
+  if auth.uid() is null then raise exception 'Not authenticated'; end if;
+  n := btrim(regexp_replace(coalesce(new_name, ''), '[[:cntrl:]]', '', 'g'));
+  if char_length(n) < 1 or char_length(n) > 40 then
+    raise exception 'Name must be 1 to 40 characters';
+  end if;
+  begin
+    update kstransfers.members set display_name = n where user_id = auth.uid();
+  exception when unique_violation then
+    raise exception 'That name is already taken';
+  end;
+  if not found then raise exception 'No membership found'; end if;
+end $;
+
+-- The members list. Regular members get names only; admins also get emails, roles, dates and pending requests.
+create or replace function kstransfers.list_members()
+returns table (user_id uuid, display_name text, role text, email text, created_at timestamptz, approved_at timestamptz)
+language plpgsql stable security definer set search_path = '' as $
+declare
+  adm boolean;
+begin
+  if not kstransfers.is_approved() then raise exception 'Not allowed'; end if;
+  adm := kstransfers.is_admin();
+  return query
+    select m.user_id, m.display_name,
+           case when adm then m.role end,
+           case when adm then m.email end,
+           case when adm then m.created_at end,
+           case when adm then m.approved_at end
+    from kstransfers.members m
+    where adm or m.role in ('admin', 'member')
+    order by m.created_at;
+end $;
+
+revoke all on function kstransfers.set_display_name(text) from public, anon;
+revoke all on function kstransfers.list_members() from public, anon;
+grant execute on function kstransfers.set_display_name(text), kstransfers.list_members() to authenticated;
+
 -- Lock out anonymous visitors completely; approved members get access
 revoke all on all tables in schema kstransfers from anon, authenticated;
 alter default privileges in schema kstransfers revoke all on tables from anon, authenticated;
@@ -318,7 +373,7 @@ create policy approved_prospects on kstransfers.prospects for all to authenticat
 
 drop policy if exists audit_read on kstransfers.audit_log;
 create policy audit_read on kstransfers.audit_log for select to authenticated
-  using (kstransfers.is_approved());
+  using (kstransfers.is_admin());
 
 drop policy if exists members_select on kstransfers.members;
 create policy members_select on kstransfers.members for select to authenticated
@@ -358,11 +413,15 @@ alter table kstransfers.cycles drop constraint if exists cycles_sane_values;
 alter table kstransfers.cycles add constraint cycles_sane_values check (
   char_length(btrim(name)) between 1 and 80
   and (end_date is null or end_date >= start_date)
+  and ordinary_slots between 0 and 1000
+  and special_slots between 0 and 1000
+  and open_slots between 0 and 1000
 ) not valid;
 
 alter table kstransfers.members drop constraint if exists members_sane_values;
 alter table kstransfers.members add constraint members_sane_values check (
   char_length(email) <= 320
+  and (display_name is null or char_length(btrim(display_name)) between 1 and 40)
 ) not valid;
 
 -- 2) Internal trigger functions must never be callable through the API.

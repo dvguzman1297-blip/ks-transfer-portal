@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import AuditLog from './AuditLog';
-import { Combobox, Modal } from './ui';
+import HeaderMenu from './HeaderMenu';
+import { Combobox, Modal, useConfirm } from './ui';
 import {
   INVITE_TYPES, STATUSES, STALE_DAYS, MAX_IMPORT_BYTES, CSV_COLS,
-  isFollowUp, isUnassigned, freshCycle, rangeLabel, cycleCountdown,
+  isFollowUp, isUnassigned, freshCycle, rangeLabel, cycleCountdown, SLOT_PRESETS, SLOT_FIELDS, slotInt, inviteUsage,
   fmt, parsePower, digits, fmtShort, toCSV, parseCSV, normalizeImportRows,
 } from '@/lib/utils';
 
@@ -19,6 +20,36 @@ const ALLIANCES = [
   { tag: 'KTA', name: 'KiLLThemALL' },
   { tag: 'T86', name: 'GemstoneTavern' },
 ];
+// Number inputs for a cycle's invite totals, plus one-click presets for the two kingdom types
+function SlotFields({ value, onChange }) {
+  const total = SLOT_FIELDS.reduce((n, [, f]) => n + slotInt(value[f]), 0);
+  return (
+    <div className="rounded-lg border border-navy-600 p-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <span className="label !mb-0">Invites this cycle</span>
+        <div className="flex gap-1.5">
+          {Object.values(SLOT_PRESETS).map((p) => (
+            <button type="button" key={p.label} className="btn-ghost px-2 py-1 text-xs"
+              onClick={() => onChange({ ...value, ordinary_slots: p.ordinary_slots, special_slots: p.special_slots, open_slots: p.open_slots })}>
+              {p.label} ({p.special_slots}/{p.ordinary_slots}/{p.open_slots})
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        {SLOT_FIELDS.map(([label, f]) => (
+          <div key={f}>
+            <label className="mb-1 block text-xs text-slate-400" htmlFor={`slots-${f}`}>{label}</label>
+            <input id={`slots-${f}`} type="number" inputMode="numeric" min="0" max="1000" className="input"
+              value={value[f] ?? ''} onChange={(e) => onChange({ ...value, [f]: e.target.value })} />
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-xs text-slate-500">Total transfer cap: <b className="text-slate-300">{total}</b> governors</p>
+    </div>
+  );
+}
+
 const INVITE_STYLE = {
   Open: 'text-emerald-300',
   Special: 'text-fuchsia-300',
@@ -30,6 +61,12 @@ const STATUS_STYLE = {
   Considering: 'text-amber-300 border-amber-500/50 bg-amber-500/10',
   Committed: 'text-emerald-300 border-emerald-500/50 bg-emerald-500/10',
   Rejected: 'text-rose-300 border-rose-500/50 bg-rose-500/10',
+};
+const PHASE_LABEL = { upcoming: 'Starts in', ongoing: 'Ongoing · ends in', ended: 'Ended' };
+const PHASE_STYLE = {
+  upcoming: 'border-sky-500/50 bg-sky-500/10 text-sky-300',
+  ongoing: 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300',
+  ended: 'border-slate-500/50 bg-slate-500/10 text-slate-400',
 };
 const STATUS_ICON = { 'Not Contacted': '○', 'In Talks': '◔', Considering: '◑', Committed: '✔', Rejected: '✕' };
 const STAGE_BAR = {
@@ -69,13 +106,14 @@ function Stat({ label, value, sub, accent }) {
 }
 
 /* ---------- Page ---------- */
-export default function Dashboard({ headerExtra = null, headerEnd = null }) {
+export default function Dashboard({ menuItems = [], isAdmin = false, userName = '' }) {
   const [cycles, setCycles] = useState([]);
   const [cycleId, setCycleId] = useState('');
   const [prospects, setProspects] = useState([]);
   const [cycleStats, setCycleStats] = useState({});
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
+  const [ask, confirmDialog] = useConfirm();
 
   const [form, setForm] = useState(EMPTY_FORM);
   const [editingId, setEditingId] = useState(null);
@@ -94,6 +132,7 @@ export default function Dashboard({ headerExtra = null, headerEnd = null }) {
   const [fStatus, setFStatus] = useState('');
   const [fAssigned, setFAssigned] = useState('');
   const [fRecruiter, setFRecruiter] = useState('');
+  const [fInvite, setFInvite] = useState(''); // '' | 'Special' | 'Ordinary' | 'Open' | '__none'
   const [sort, setSort] = useState({ key: 'power', dir: 'desc' });
   const fileRef = useRef(null);
 
@@ -149,6 +188,9 @@ export default function Dashboard({ headerExtra = null, headerEnd = null }) {
       name: newCycle.name.trim(),
       start_date: newCycle.start_date,
       end_date: newCycle.end_date || null,
+      ordinary_slots: slotInt(newCycle.ordinary_slots),
+      special_slots: slotInt(newCycle.special_slots),
+      open_slots: slotInt(newCycle.open_slots),
       status: 'active',
     }).select().single();
     if (error) return notify(error.message, 'err');
@@ -166,6 +208,9 @@ export default function Dashboard({ headerExtra = null, headerEnd = null }) {
       name: dateEdit.name.trim(),
       start_date: dateEdit.start,
       end_date: dateEdit.end || null,
+      ordinary_slots: slotInt(dateEdit.ordinary_slots),
+      special_slots: slotInt(dateEdit.special_slots),
+      open_slots: slotInt(dateEdit.open_slots),
     }).eq('id', dateEdit.id);
     if (error) return notify(error.message, 'err');
     setDateEdit(null);
@@ -175,7 +220,11 @@ export default function Dashboard({ headerExtra = null, headerEnd = null }) {
 
   async function deleteCycle(c) {
     const n = cycleStats[c.id]?.total ?? 0;
-    if (!confirm(`Delete "${c.name}"${n ? ` and its ${n} prospect${n === 1 ? '' : 's'}` : ''}? This cannot be undone.`)) return;
+    if (!(await ask({
+      title: `Delete "${c.name}"?`,
+      message: n ? `This also deletes its ${n} prospect${n === 1 ? '' : 's'}. This cannot be undone.` : 'This cannot be undone.',
+      confirmLabel: 'Delete cycle',
+    }))) return;
     const { error } = await supabase.from('cycles').delete().eq('id', c.id);
     if (error) return notify(error.message, 'err');
     if (dateEdit?.id === c.id) setDateEdit(null);
@@ -266,10 +315,11 @@ export default function Dashboard({ headerExtra = null, headerEnd = null }) {
   }
 
   async function deleteProspect(p) {
-    if (!confirm(`Delete ${p.ign}?`)) return;
+    if (!(await ask({ title: `Delete ${p.ign}?`, message: 'This removes the prospect from this cycle. This cannot be undone.', confirmLabel: 'Delete prospect' }))) return false;
     const { error } = await supabase.from('prospects').delete().eq('id', p.id);
-    if (error) return notify(error.message, 'err');
+    if (error) { notify(error.message, 'err'); return false; }
     setProspects((list) => list.filter((x) => x.id !== p.id));
+    return true;
   }
 
   function closeForm() { setShowForm(false); setEditingId(null); setForm(EMPTY_FORM); }
@@ -310,7 +360,7 @@ export default function Dashboard({ headerExtra = null, headerEnd = null }) {
       const rows = normalizeImportRows(raw, cycleId);
 
       if (!rows.length) throw new Error('No valid rows found (player_id and ign are required)');
-      if (!confirm(`Import ${rows.length} prospects into "${currentCycle?.name}"?`)) return;
+      if (!(await ask({ title: `Import ${rows.length} prospects?`, message: `They will be added to "${currentCycle?.name}".`, confirmLabel: 'Import', danger: false }))) return;
       const { error } = await supabase.from('prospects').insert(rows);
       if (error) throw new Error(error.message);
       notify(`Imported ${rows.length} prospects`);
@@ -330,6 +380,24 @@ export default function Dashboard({ headerExtra = null, headerEnd = null }) {
   }, [assignedAlliances]);
   const recruiters = useMemo(() => [...new Set(prospects.map((p) => p.recruiter).filter(Boolean))].sort(), [prospects]);
 
+  // Who is heading where: every prospect except the rejected ones, grouped by assigned alliance
+  const byAlliance = useMemo(() => {
+    const map = new Map();
+    const none = { total: 0, committed: 0, power: 0, committedPower: 0 };
+    let power = 0, committedPower = 0;
+    for (const p of prospects) {
+      if (p.status === 'Rejected') continue;
+      const tag = (p.assigned_alliance || '').trim();
+      const slot = tag ? (map.get(tag) || map.set(tag, { tag, total: 0, committed: 0, power: 0, committedPower: 0 }).get(tag)) : none;
+      const pw = Number(p.power) || 0;
+      slot.total++; slot.power += pw; power += pw;
+      if (p.status === 'Committed') { slot.committed++; slot.committedPower += pw; committedPower += pw; }
+    }
+    return { rows: [...map.values()].sort((a, b) => b.power - a.power || a.tag.localeCompare(b.tag)), none, power, committedPower };
+  }, [prospects]);
+
+  const invites = useMemo(() => inviteUsage(prospects, currentCycle), [prospects, currentCycle]);
+
   const summary = useMemo(() => {
     const byStatus = Object.fromEntries(STATUSES.map((s) => [s, 0]));
     let power = 0, followUp = 0, unassigned = 0;
@@ -346,7 +414,12 @@ export default function Dashboard({ headerExtra = null, headerEnd = null }) {
     return { byStatus, power, committed, avg: committed ? Math.round(power / committed) : 0, followUp, unassigned };
   }, [prospects]);
 
-  const countdown = useMemo(() => cycleCountdown(currentCycle), [currentCycle]);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const countdown = cycleCountdown(currentCycle, now);
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -357,6 +430,7 @@ export default function Dashboard({ headerExtra = null, headerEnd = null }) {
       if (fStatus && p.status !== fStatus) return false;
       if (fAssigned && (fAssigned === '__none' ? p.assigned_alliance : p.assigned_alliance !== fAssigned)) return false;
       if (fRecruiter && p.recruiter !== fRecruiter) return false;
+      if (fInvite && (fInvite === '__none' ? p.invite_type : p.invite_type !== fInvite)) return false;
       if (!q) return true;
       return [p.ign, p.player_id, p.kingdom, p.recruiter, p.status, p.alliance, p.truegold_grade, p.assigned_alliance, p.invite_type, p.notes]
         .some((v) => String(v ?? '').toLowerCase().includes(q));
@@ -368,19 +442,21 @@ export default function Dashboard({ headerExtra = null, headerEnd = null }) {
       if (key === 'power' || key === 'kingdom') return ((Number(x) || 0) - (Number(y) || 0)) * mul;
       return String(x ?? '').localeCompare(String(y ?? ''), undefined, { sensitivity: 'base' }) * mul;
     });
-  }, [prospects, search, fStatus, fAssigned, fRecruiter, quick, sort]);
+  }, [prospects, search, fStatus, fAssigned, fRecruiter, fInvite, quick, sort]);
 
   const toggleSort = (key) =>
     setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'power' ? 'desc' : 'asc' }));
 
   const Th = ({ k, children, className = '' }) => (
-    <th className={`cursor-pointer select-none whitespace-nowrap px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gold-400 hover:text-gold-300 ${className}`} onClick={() => toggleSort(k)}>
-      {children} {sort.key === k ? (sort.dir === 'asc' ? '▲' : '▼') : ''}
+    <th scope="col" aria-sort={sort.key === k ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'} className={`whitespace-nowrap text-left text-xs font-semibold uppercase tracking-wide text-gold-400 ${className}`}>
+      <button type="button" className="w-full px-3 py-2 text-left uppercase tracking-wide hover:text-gold-300" onClick={() => toggleSort(k)}>
+        {children} {sort.key === k ? (sort.dir === 'asc' ? '▲' : '▼') : ''}
+      </button>
     </th>
   );
 
-  const clearFilters = () => { setSearch(''); setFStatus(''); setFAssigned(''); setFRecruiter(''); setQuick(''); };
-  const filtersActive = search || fStatus || fAssigned || fRecruiter || quick;
+  const clearFilters = () => { setSearch(''); setFStatus(''); setFAssigned(''); setFRecruiter(''); setFInvite(''); setQuick(''); };
+  const filtersActive = search || fStatus || fAssigned || fRecruiter || fInvite || quick;
 
   /* ---------- render ---------- */
   const activeCycles = cycles.filter((c) => c.status === 'active').sort((a, b) => String(b.start_date).localeCompare(String(a.start_date)));
@@ -410,7 +486,7 @@ export default function Dashboard({ headerExtra = null, headerEnd = null }) {
 
         <div className="mt-3 flex flex-wrap gap-2">
           <button className="btn-blue px-3 py-1.5" disabled={isOpen} onClick={() => { setCycleId(c.id); setShowCycles(false); }}>{isOpen ? '✓ Viewing' : 'Open'}</button>
-          <button className="btn-ghost px-3 py-1.5" onClick={() => setDateEdit(dateEdit?.id === c.id ? null : { id: c.id, name: c.name, start: c.start_date, end: c.end_date ?? '' })}>✎ Edit</button>
+          <button className="btn-ghost px-3 py-1.5" onClick={() => setDateEdit(dateEdit?.id === c.id ? null : { id: c.id, name: c.name, start: c.start_date, end: c.end_date ?? '', ordinary_slots: c.ordinary_slots ?? 0, special_slots: c.special_slots ?? 0, open_slots: c.open_slots ?? 0 })}>✎ Edit</button>
           <button className="btn-ghost px-3 py-1.5" onClick={() => toggleArchive(c)}>{archived ? 'Reactivate' : 'Archive'}</button>
           <button className="btn-ghost ml-auto px-3 py-1.5 text-rose-300 hover:border-rose-500/60" onClick={() => deleteCycle(c)} aria-label={`Delete ${c.name}`}>🗑 Delete</button>
         </div>
@@ -430,7 +506,10 @@ export default function Dashboard({ headerExtra = null, headerEnd = null }) {
               <label className="label">End date</label>
               <input type="date" className="input" value={dateEdit.end} min={dateEdit.start} onClick={(e) => e.currentTarget.showPicker?.()} onChange={(e) => setDateEdit({ ...dateEdit, end: e.target.value })} />
             </div>
-            <div className="flex items-end gap-2">
+            <div className="sm:col-span-3">
+              <SlotFields value={dateEdit} onChange={setDateEdit} />
+            </div>
+            <div className="flex items-end gap-2 sm:col-span-3">
               <button className="btn-gold flex-1">Save</button>
               <button type="button" className="btn-ghost" onClick={() => setDateEdit(null)}>Cancel</button>
             </div>
@@ -443,8 +522,8 @@ export default function Dashboard({ headerExtra = null, headerEnd = null }) {
   return (
     <main className="mx-auto w-full max-w-[1800px] px-3 py-4 sm:px-6 sm:py-6 2xl:px-10">
       {/* Header */}
-      <header className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
+      <header className="relative mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3 pr-14 sm:pr-0">
           <img src="/logo.png" alt="K1886 Kingdom HQ crest" className="h-9 w-9 shrink-0 object-contain" />
           <div>
             <h1 className="bg-gradient-to-r from-gold-300 via-gold-500 to-gold-600 bg-clip-text text-2xl font-black tracking-wide text-transparent sm:text-3xl">
@@ -462,12 +541,46 @@ export default function Dashboard({ headerExtra = null, headerEnd = null }) {
               </option>
             ))}
           </select>
-          {headerExtra}
-          <button className="btn-ghost shrink-0" onClick={() => setShowAudit(true)}>📜 Audit Log</button>
           <button className="btn-gold shrink-0" onClick={() => setShowCycles(true)}>Manage Cycles</button>
-          {headerEnd}
+          {/* pinned to the top-right corner on phones, inline on larger screens */}
+          <div className="absolute right-0 top-0 sm:static">
+            <HeaderMenu items={[
+              ...menuItems,
+              ...(isAdmin ? [{ label: 'Audit Log', icon: '📜', onClick: () => setShowAudit(true) }] : []),
+            ]} />
+          </div>
         </div>
       </header>
+
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-lg font-bold text-slate-100 sm:text-xl">
+          {userName && <>Welcome, <span className="text-gold-400">{userName}</span></>}
+        </p>
+        {countdown && (
+          <div className="card relative flex flex-wrap items-center gap-x-3 gap-y-0.5 overflow-hidden px-3 py-2 !shadow-none">
+            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${PHASE_STYLE[countdown.phase]}`}>
+              {countdown.phase === 'ongoing' && <span aria-hidden="true" className="mr-1">●</span>}{countdown.phase === 'ongoing' && !countdown.parts ? 'Ongoing' : PHASE_LABEL[countdown.phase]}
+            </span>
+            {countdown.parts ? (
+              <div className={`flex items-baseline gap-2 font-extrabold tabular-nums ${countdown.tone}`} role="timer" aria-label={countdown.big}>
+                {[['d', 'd'], ['h', 'h'], ['m', 'm'], ['s', 's']].map(([k, u]) => (
+                  <span key={k} className="text-xl leading-none">
+                    {String(countdown.parts[k]).padStart(2, '0')}<span className="ml-0.5 text-xs font-semibold opacity-60">{u}</span>
+                  </span>
+                ))}
+              </div>
+            ) : countdown.phase === 'ended' ? null : (
+              <span className={`text-xl font-extrabold ${countdown.tone}`}>{countdown.big}</span>
+            )}
+            <span className="text-[11px] text-slate-400">{countdown.sub}</span>
+            {countdown.parts && countdown.progress > 0 && (
+              <div className="absolute inset-x-0 bottom-0 h-0.5 bg-navy-700" title={`${Math.round(countdown.progress * 100)}% of the cycle has passed`}>
+                <div className="h-full bg-gold-400/80" style={{ width: `${Math.round(countdown.progress * 100)}%` }} />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {loading ? (
         <p className="py-20 text-center text-slate-400">Loading…</p>
@@ -479,76 +592,121 @@ export default function Dashboard({ headerExtra = null, headerEnd = null }) {
       ) : (
         <>
           {/* Summary */}
-          <section className="mb-5 grid grid-cols-1 gap-3 md:grid-cols-2">
-            <div className="contents">
-              <div className="card order-1 flex flex-col p-4">
-                <div className="mb-3 flex items-center justify-between">
-                  <h2 className="text-sm font-bold uppercase tracking-wide text-gold-400">Committed Transfers</h2>
-                  {currentCycle?.status === 'archived' && <span className="text-xs text-slate-500">Archived cycle</span>}
-                </div>
-                <div className="grid flex-1 grid-cols-3 content-center gap-3 py-2">
-                  <div>
-                    <div className="text-xs uppercase tracking-wide text-slate-400">Players</div>
-                    <div className="text-4xl font-extrabold text-emerald-400">{summary.committed}</div>
-                  </div>
-                  <div title={fmt(summary.power)}>
-                    <div className="text-xs uppercase tracking-wide text-slate-400">Power</div>
-                    <div className="text-4xl font-extrabold text-gold-400">{fmtShort(summary.power)}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs uppercase tracking-wide text-slate-400">Avg / player</div>
-                    <div className="text-4xl font-extrabold text-slate-200">{summary.avg ? fmtShort(summary.avg) : '—'}</div>
-                  </div>
-                </div>
-                <div className="mt-2 border-t border-navy-700 pt-3 text-xs text-slate-400">
-                  Total committed power <b className="ml-1 text-gold-300">{fmt(summary.power) || 0}</b>
-                </div>
+          <section className="card mb-5 flex flex-col gap-4 p-4">
+            {/* Title + the committed-power headline */}
+            <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+              <h2 className="text-sm font-bold uppercase tracking-wide text-gold-400">
+                Pipeline <span className="font-semibold normal-case tracking-normal text-slate-400">· {prospects.length} prospect{prospects.length === 1 ? '' : 's'}</span>
+                {currentCycle?.status === 'archived' && <span className="ml-2 text-xs font-normal normal-case tracking-normal text-slate-500">Archived cycle</span>}
+                {fStatus && <button className="ml-3 text-xs font-normal normal-case tracking-normal text-gold-400 underline" onClick={() => setFStatus('')}>Show all</button>}
+              </h2>
+              <div className="flex items-baseline gap-5 text-xs uppercase tracking-wide text-slate-400">
+                <span title={fmt(summary.power)}>Committed power <b className="ml-1 text-xl font-extrabold normal-case tracking-normal text-gold-400">{fmtShort(summary.power)}</b></span>
+                <span>Avg / player <b className="ml-1 text-xl font-extrabold normal-case tracking-normal text-slate-200">{summary.avg ? fmtShort(summary.avg) : '—'}</b></span>
               </div>
-              <div className="contents">
-                <div className="card order-3 flex flex-col justify-center p-3 sm:p-4">
-                  <div className="text-xs uppercase tracking-wide text-slate-400">Cycle clock</div>
-                  <div className={`mt-1 text-2xl font-extrabold ${countdown?.tone}`}>{countdown?.big}</div>
-                  <div className="text-xs text-slate-400">{countdown?.sub}</div>
+            </div>
+
+            {/* Status filters */}
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
+              {STATUSES.map((s) => (
+                <button key={s} onClick={() => setFStatus(fStatus === s ? '' : s)}
+                  title={`${prospects.length ? Math.round((summary.byStatus[s] / prospects.length) * 100) : 0}% of the cycle`}
+                  className={`flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left ${STATUS_STYLE[s]} ${fStatus === s ? 'ring-2 ring-gold-400' : ''}`}>
+                  <span className="text-xs">{STATUS_ICON[s]} {s}</span>
+                  <span className="text-2xl font-extrabold leading-none">{summary.byStatus[s]}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-1 gap-x-10 gap-y-5 border-t border-navy-700 pt-4 lg:grid-cols-2">
+              {/* Left: invites, then what needs attention */}
+              <div className="flex flex-col gap-5">
+                <div>
+                  <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                    <h3 className="text-xs font-bold uppercase tracking-wide text-gold-400">
+                      Invites
+                      {fInvite && <button className="ml-3 font-normal normal-case tracking-normal text-gold-400 underline" onClick={() => setFInvite('')}>Show all</button>}
+                    </h3>
+                    {invites.total > 0 && (
+                      <span className="text-xs text-slate-400" title="Rejected prospects do not use a slot">
+                        <b className="text-sm text-slate-100">{invites.used}</b> of {invites.total} assigned · <b className="text-sm text-emerald-400">{Math.max(0, invites.total - invites.used)}</b> left
+                      </span>
+                    )}
+                  </div>
+                  {invites.total > 0 ? (
+                    <div className="space-y-2">
+                      {invites.rows.map((r) => {
+                        const over = r.left < 0;
+                        const pct = r.total ? Math.min(100, Math.round((r.used / r.total) * 100)) : (r.used ? 100 : 0);
+                        return (
+                          <button key={r.type} onClick={() => setFInvite(fInvite === r.type ? '' : r.type)}
+                            title={`${r.used} ${r.type} invites assigned of ${r.total}. Click to filter the roster.`}
+                            className={`flex w-full items-center gap-3 rounded-md px-2 py-1 text-left text-sm hover:bg-navy-700/50 ${fInvite === r.type ? 'bg-gold-500/10' : ''}`}>
+                            <span className="w-16 shrink-0 font-semibold text-slate-100">{r.type}</span>
+                            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-navy-700">
+                              <div className={`h-full rounded-full ${over ? 'bg-rose-500' : pct >= 90 ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${pct}%` }} />
+                            </div>
+                            <span className="w-12 shrink-0 text-right text-xs text-slate-400"><b className="text-sm text-slate-100">{r.used}</b>/{r.total}</span>
+                            <span className={`w-20 shrink-0 text-right text-xs ${over ? 'font-semibold text-rose-300' : 'text-slate-400'}`}>{over ? `over by ${-r.left}` : `${r.left} left`}</span>
+                          </button>
+                        );
+                      })}
+                      {invites.untyped > 0 && (
+                        <button onClick={() => setFInvite(fInvite === '__none' ? '' : '__none')}
+                          className={`rounded-md px-2 py-0.5 text-left text-[11px] text-amber-300 underline-offset-2 hover:underline ${fInvite === '__none' ? 'bg-gold-500/10' : ''}`}>
+                          {invites.untyped} prospect{invites.untyped === 1 ? ' has' : 's have'} no invite type yet and are not counted · show
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-500">No invite totals set for this cycle. Add them under Manage Cycles → Edit.</p>
+                  )}
                 </div>
-                <div className="card order-4 flex flex-col justify-center p-3 sm:p-4">
-                  <div className="text-xs uppercase tracking-wide text-slate-400">Needs attention</div>
-                  <div className="mt-2 flex flex-col gap-1.5 text-sm">
+
+                <div>
+                  <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-gold-400">Needs attention</h3>
+                  <div className="flex flex-wrap gap-2 text-sm">
                     <button onClick={() => setQuick(quick === 'followup' ? '' : 'followup')}
-                      className={`flex items-center justify-between rounded-lg border px-2 py-1 text-left ${quick === 'followup' ? 'border-gold-400 bg-gold-500/10' : 'border-navy-600'}`}>
-                      <span>Follow up <span className="text-xs text-slate-500">({STALE_DAYS}d+ idle)</span></span>
+                      className={`flex items-center gap-2 rounded-full border px-3 py-1 ${quick === 'followup' ? 'border-gold-400 bg-gold-500/10' : 'border-navy-600'}`}>
+                      Follow up <span className="text-xs text-slate-500">({STALE_DAYS}d+ idle)</span>
                       <b className={summary.followUp ? 'text-amber-300' : 'text-slate-500'}>{summary.followUp}</b>
                     </button>
                     <button onClick={() => setQuick(quick === 'unassigned' ? '' : 'unassigned')}
-                      className={`flex items-center justify-between rounded-lg border px-2 py-1 text-left ${quick === 'unassigned' ? 'border-gold-400 bg-gold-500/10' : 'border-navy-600'}`}>
-                      <span>No recruiter</span>
+                      className={`flex items-center gap-2 rounded-full border px-3 py-1 ${quick === 'unassigned' ? 'border-gold-400 bg-gold-500/10' : 'border-navy-600'}`}>
+                      No recruiter
                       <b className={summary.unassigned ? 'text-amber-300' : 'text-slate-500'}>{summary.unassigned}</b>
                     </button>
                   </div>
                 </div>
               </div>
-            </div>
 
-            <div className="card order-2 flex flex-col p-3 sm:p-4">
-              <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-wide text-slate-400">
-                <span>Pipeline · {prospects.length} prospect{prospects.length === 1 ? '' : 's'}</span>
-                {fStatus && <button className="normal-case text-gold-400 underline" onClick={() => setFStatus('')}>Show all</button>}
-              </div>
-              <div className="mb-3 flex h-2.5 overflow-hidden rounded-full bg-navy-900">
-                {STATUSES.map((s) => summary.byStatus[s] > 0 && (
-                  <div key={s} title={`${s}: ${summary.byStatus[s]}`} className={STAGE_BAR[s]} style={{ width: `${(summary.byStatus[s] / prospects.length) * 100}%` }} />
-                ))}
-              </div>
-              <div className="grid flex-1 grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
-                {STATUSES.map((s) => (
-                  <button key={s} onClick={() => setFStatus(fStatus === s ? '' : s)}
-                    className={`flex flex-col justify-between rounded-lg border px-3 py-2 text-left text-xs ${STATUS_STYLE[s]} ${fStatus === s ? 'ring-2 ring-gold-400' : ''}`}>
-                    <div>{STATUS_ICON[s]} {s}</div>
-                    <div>
-                      <div className="text-3xl font-extrabold leading-none">{summary.byStatus[s]}</div>
-                      <div className="mt-1 text-[10px] opacity-70">{prospects.length ? Math.round((summary.byStatus[s] / prospects.length) * 100) : 0}%</div>
-                    </div>
-                  </button>
-                ))}
+              {/* Right: where everyone is going */}
+              <div>
+                <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                  <h3 className="text-xs font-bold uppercase tracking-wide text-gold-400">
+                    Alliance assignments
+                    {fAssigned && <button className="ml-3 font-normal normal-case tracking-normal text-gold-400 underline" onClick={() => setFAssigned('')}>Show all</button>}
+                  </h3>
+                  <span className="text-xs text-slate-400" title="Combined power of everyone assigned who has not been rejected">Incoming <b className="ml-1 text-sm text-gold-300">+{fmtShort(byAlliance.power)}</b></span>
+                </div>
+                <div className="divide-y divide-navy-700/60">
+                  {[...byAlliance.rows, ...(byAlliance.none.total ? [{ tag: 'Unassigned', key: '__none', ...byAlliance.none }] : [])].map((r) => {
+                    const key = r.key || r.tag;
+                    return (
+                      <button key={key} onClick={() => setFAssigned(fAssigned === key ? '' : key)}
+                        title={`${r.total} going to ${r.tag}: +${fmt(r.power)} power. ${r.committed} committed (+${fmt(r.committedPower)}). Click to filter the roster.`}
+                        className={`flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left text-sm hover:bg-navy-700/50 ${fAssigned === key ? 'bg-gold-500/10' : ''}`}>
+                        <span className={`w-24 shrink-0 truncate font-semibold ${r.key ? 'text-slate-400' : 'text-slate-100'}`}>{r.tag}</span>
+                        <span className="flex-1 text-xs text-slate-400">
+                          {r.total} player{r.total === 1 ? '' : 's'}
+                          {r.committed > 0 && <span className="ml-2 text-emerald-400">✓ {r.committed} committed</span>}
+                        </span>
+                        <b className="shrink-0 text-gold-300">+{fmtShort(r.power)}</b>
+                      </button>
+                    );
+                  })}
+                  {!byAlliance.rows.length && !byAlliance.none.total && <p className="py-1 text-xs text-slate-500">No prospects yet.</p>}
+                </div>
               </div>
             </div>
           </section>
@@ -556,7 +714,9 @@ export default function Dashboard({ headerExtra = null, headerEnd = null }) {
           {/* Roster */}
           <section className="card p-3 sm:p-5">
             <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-              <h2 className="text-lg font-bold text-gold-400">Prospect Roster <span className="text-sm font-normal text-slate-400">({visible.length}/{prospects.length})</span></h2>
+              <h2 className="text-lg font-bold text-gold-400">Prospect Roster <span className="text-sm font-normal text-slate-400">({visible.length}/{prospects.length})</span>
+                {filtersActive && <button className="ml-3 text-xs font-normal text-gold-400 underline" onClick={clearFilters}>Clear filters</button>}
+              </h2>
               <div className="flex flex-wrap gap-2">
                 <button className="btn-blue" onClick={openAdd}>+ Add Prospect</button>
                 <button className="btn-ghost" onClick={exportCSV}>⬇ Export Cycle to CSV</button>
@@ -565,31 +725,34 @@ export default function Dashboard({ headerExtra = null, headerEnd = null }) {
               </div>
             </div>
 
-            <div className="mb-3 flex flex-col gap-2 sm:flex-row">
-              <input className="input min-w-0 sm:flex-1" placeholder="🔎 Search name, ID, kingdom, alliance, notes…" value={search} onChange={(e) => setSearch(e.target.value)} />
-              <select className="input sm:w-44 sm:shrink-0" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
+            <div className="mb-3 grid grid-cols-2 gap-2 sm:flex">
+              <input className="input col-span-2 min-w-0 sm:flex-1" type="search" aria-label="Search prospects" placeholder="🔎 Search name, ID, kingdom, alliance, notes…" value={search} onChange={(e) => setSearch(e.target.value)} />
+              <select className="input sm:w-44 sm:shrink-0" aria-label="Status" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
                 <option value="">All statuses</option>{STATUSES.map((s) => <option key={s}>{s}</option>)}
               </select>
-              <select className="input sm:w-48 sm:shrink-0" value={fAssigned} onChange={(e) => setFAssigned(e.target.value)}>
+              <select className="input sm:w-48 sm:shrink-0" aria-label="Assigned alliance" value={fAssigned} onChange={(e) => setFAssigned(e.target.value)}>
                 <option value="">All assignments</option>
                 <option value="__none">Unassigned</option>
                 {assignedAlliances.map((a) => <option key={a}>{a}</option>)}
               </select>
-              <select className="input sm:w-44 sm:shrink-0" value={fRecruiter} onChange={(e) => setFRecruiter(e.target.value)}>
+              <select className="input sm:w-40 sm:shrink-0" value={fInvite} onChange={(e) => setFInvite(e.target.value)} aria-label="Invite type">
+                <option value="">All invites</option>
+                {['Special', 'Ordinary', 'Open'].map((t) => <option key={t}>{t}</option>)}
+                <option value="__none">No invite type</option>
+              </select>
+              <select className="input col-span-2 sm:col-span-1 sm:w-44 sm:shrink-0" aria-label="Recruiter" value={fRecruiter} onChange={(e) => setFRecruiter(e.target.value)}>
                 <option value="">All recruiters</option>{recruiters.map((r) => <option key={r}>{r}</option>)}
               </select>
             </div>
-            {filtersActive && <button className="mb-3 text-xs text-gold-400 underline" onClick={clearFilters}>Clear filters</button>}
 
-            <div className="overflow-x-auto rounded-lg border border-navy-600">
+            <div className="max-h-[75vh] overflow-auto rounded-lg border border-navy-600">
               <table className="min-w-full text-sm">
-                <thead className="bg-navy-900">
+                <thead className="sticky top-0 z-10 bg-navy-900 shadow-[0_1px_0_rgb(var(--navy-600))]">
                   <tr>
-                    <Th k="ign">IGN</Th><Th k="player_id">ID</Th><Th k="kingdom">KINGDOM</Th>
+                    <Th k="ign" className="sticky left-0 z-20 bg-navy-900">IGN</Th><Th k="player_id">ID</Th><Th k="kingdom">KINGDOM</Th>
                     <Th k="power">Power</Th><Th k="alliance">Alliance</Th><Th k="truegold_grade">TC</Th><Th k="recruiter">Recruiter</Th><Th k="assigned_alliance">Assigned To</Th><Th k="invite_type">Invite</Th>
                     <Th k="status">Status</Th>
                     <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gold-400">Notes</th>
-                    <th className="px-3 py-2" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-navy-700">
@@ -598,7 +761,12 @@ export default function Dashboard({ headerExtra = null, headerEnd = null }) {
                       className="cursor-pointer hover:bg-navy-700/40 focus:bg-navy-700/40 focus:outline-none"
                       onClick={() => editProspect(p)}
                       onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); editProspect(p); } }}>
-                      <td className="whitespace-nowrap px-3 py-2 font-semibold text-slate-100">{p.ign}</td>
+                      <td className="sticky left-0 z-[1] whitespace-nowrap bg-navy-800 px-3 py-2 font-semibold text-slate-100">
+                        <div className="flex items-center gap-2">
+                          <button className="rounded px-1 text-rose-400 hover:bg-rose-500/10 hover:text-rose-300" onClick={(e) => { e.stopPropagation(); deleteProspect(p); }} aria-label={`Delete ${p.ign}`} title="Delete">🗑</button>
+                          <span>{p.ign}</span>
+                        </div>
+                      </td>
                       <td className="whitespace-nowrap px-3 py-2 text-slate-400">{p.player_id}</td>
                       <td className="px-3 py-2">{p.kingdom ?? '—'}</td>
                       <td className="whitespace-nowrap px-3 py-2 font-mono text-gold-300">{fmt(p.power)}</td>
@@ -630,14 +798,10 @@ export default function Dashboard({ headerExtra = null, headerEnd = null }) {
                           {STATUSES.map((s) => <option key={s} className="bg-navy-900 text-slate-100">{s}</option>)}
                         </select>
                       </td>
-                      <td className="max-w-[16rem] truncate px-3 py-2 text-slate-400" title={p.notes || ''}>{p.notes}</td>
-                      <td className="whitespace-nowrap px-3 py-2 text-right" onClick={(e) => e.stopPropagation()}>
-                        <button className="px-1 text-rose-400 hover:text-rose-300" onClick={() => deleteProspect(p)} aria-label="Delete">🗑</button>
-                      </td>
-                    </tr>
+                      <td className="max-w-[16rem] truncate px-3 py-2 text-slate-400" title={p.notes || ''}>{p.notes}</td>                    </tr>
                   ))}
                   {!visible.length && (
-                    <tr><td colSpan={12} className="px-3 py-10 text-center text-slate-500">
+                    <tr><td colSpan={11} className="px-3 py-10 text-center text-slate-500">
                       {prospects.length ? 'No prospects match your filters.' : 'No prospects in this cycle yet.'}
                     </td></tr>
                   )}
@@ -715,6 +879,15 @@ export default function Dashboard({ headerExtra = null, headerEnd = null }) {
               <div className="flex gap-2 sm:col-span-2 lg:col-span-4">
                 <button className="btn-blue flex-1 sm:flex-none" disabled={saving}>{saving ? 'Saving…' : editingId ? 'Update Prospect' : 'Add Prospect'}</button>
                 <button type="button" className="btn-ghost" onClick={closeForm}>Cancel</button>
+                {editingId && (
+                  <button type="button" className="btn-ghost ml-auto text-rose-300 hover:border-rose-500/60" disabled={saving}
+                    onClick={async () => {
+                      const p = prospects.find((x) => x.id === editingId);
+                      if (p && await deleteProspect(p)) closeForm();
+                    }}>
+                    🗑 Delete
+                  </button>
+                )}
               </div>
             </form>
           </Modal>
@@ -723,7 +896,7 @@ export default function Dashboard({ headerExtra = null, headerEnd = null }) {
       )}
 
       {/* Manage cycles modal */}
-      {showAudit && <AuditLog onClose={() => setShowAudit(false)} notify={notify} />}
+      {isAdmin && showAudit && <AuditLog cycles={cycles} currentCycleId={cycleId} onClose={() => setShowAudit(false)} notify={notify} />}
 
 
       {showCycles && (
@@ -753,6 +926,9 @@ export default function Dashboard({ headerExtra = null, headerEnd = null }) {
                   onClick={(e) => e.currentTarget.showPicker?.()}
                   onChange={(e) => setNewCycle({ ...newCycle, end_date: e.target.value })} />
               </div>
+              <div className="sm:col-span-2">
+                <SlotFields value={newCycle} onChange={setNewCycle} />
+              </div>
               <button className="btn-blue sm:col-span-2">Create cycle</button>
             </form>
           )}
@@ -767,8 +943,10 @@ export default function Dashboard({ headerExtra = null, headerEnd = null }) {
         </Modal>
       )}
 
+      {confirmDialog}
+
       {toast && (
-        <div className={`fixed bottom-4 left-1/2 z-[60] w-[92%] max-w-md -translate-x-1/2 rounded-lg border px-4 py-3 text-sm shadow-xl ${toast.type === 'err' ? 'border-rose-500 bg-rose-950 text-rose-200' : 'border-emerald-500 bg-emerald-950 text-emerald-200'}`}>
+        <div role={toast.type === 'err' ? 'alert' : 'status'} aria-live="polite" className={`fixed bottom-4 left-1/2 z-[60] w-[92%] max-w-md -translate-x-1/2 rounded-lg border px-4 py-3 text-sm shadow-xl ${toast.type === 'err' ? 'border-rose-500 bg-rose-950 text-rose-200' : 'border-emerald-500 bg-emerald-950 text-emerald-200'}`}>
           {toast.msg}
         </div>
       )}

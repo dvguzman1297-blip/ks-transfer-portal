@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   parsePower, fmtShort, fmt, digits, csvSafe, clip, toCSV, parseCSV, normalizeImportRows,
   isFollowUp, isUnassigned, parseLocalDate, isoDate, freshCycle, rangeLabel, cycleCountdown,
-  MAX_IMPORT_ROWS, STATUSES,
+  MAX_IMPORT_ROWS, STATUSES, slotInt, inviteUsage, SLOT_PRESETS,
 } from '../lib/utils.js';
 
 describe('parsePower', () => {
@@ -240,22 +240,62 @@ describe('dates and cycle clock', () => {
     assert.equal(rangeLabel('2026-11-09', null), 'Starts Nov 9, 2026 · no end date');
   });
 
-  test('cycleCountdown: before, during and after a cycle', () => {
-    setNow(2026, 11, 6);
+  test('cycleCountdown: literal countdown to 00:00 UTC', () => {
+    const at = (s) => Date.parse(s);
     assert.equal(cycleCountdown(null), null);
+    const c = { start_date: '2026-11-09', end_date: '2026-11-15' };
+    // before the start: counts down to 00:00 UTC on the start date
+    assert.equal(cycleCountdown(c, at('2026-11-08T22:58:55Z')).big, '01:01:05');
+    assert.equal(cycleCountdown(c, at('2026-11-06T12:00:00Z')).big, '2d 12:00:00');
+    assert.equal(cycleCountdown(c, at('2026-11-06T12:00:00Z')).sub, 'Nov 9, 2026 · 00:00 UTC');
+    // during: counts down to 00:00 UTC after the end date
+    assert.equal(cycleCountdown(c, at('2026-11-09T00:00:00Z')).big, '7d 00:00:00');
+    assert.equal(cycleCountdown(c, at('2026-11-15T23:59:59Z')).big, '00:00:01');
+    assert.equal(cycleCountdown(c, at('2026-11-10T00:00:00Z')).sub, 'Nov 16, 2026 · 00:00 UTC');
     assert.deepEqual(
-      (({ big, sub }) => ({ big, sub }))(cycleCountdown({ start_date: '2026-11-09', end_date: '2026-11-15' })),
-      { big: '3d', sub: 'until cycle starts' });
-    assert.equal(cycleCountdown({ start_date: '2026-11-01', end_date: '2026-11-06' }).big, 'Today');
-    assert.equal(cycleCountdown({ start_date: '2026-11-01', end_date: '2026-11-05' }).big, 'Ended');
-    assert.equal(cycleCountdown({ start_date: '2026-11-01', end_date: '2026-11-04' }).sub, '2 days ago');
-    assert.equal(cycleCountdown({ start_date: '2026-11-01', end_date: '2026-11-05' }).sub, '1 day ago');
-    assert.equal(cycleCountdown({ start_date: '2026-11-01', end_date: null }).big, '—');
+      ['2026-11-08T00:00:00Z', '2026-11-12T00:00:00Z', '2026-11-16T00:00:00Z'].map((t) => { const r = cycleCountdown(c, at(t)); return [r.phase, r.label]; }),
+      [['upcoming', 'Starts in'], ['ongoing', 'Ends in'], ['ended', '']]);
+    // after: ended
+    assert.equal(cycleCountdown(c, at('2026-11-16T00:00:00Z')).big, 'Ended');
+    assert.equal(cycleCountdown(c, at('2026-11-16T05:00:00Z')).sub, '05:00:00 ago');
+    assert.equal(cycleCountdown({ start_date: '2026-11-01', end_date: null }, at('2026-11-06T00:00:00Z')).big, '—');
   });
   test('cycleCountdown colour warns as the deadline approaches', () => {
-    setNow(2026, 11, 6);
-    assert.equal(cycleCountdown({ start_date: '2026-11-01', end_date: '2026-11-08' }).tone, 'text-rose-300'); // 2 days
-    assert.equal(cycleCountdown({ start_date: '2026-11-01', end_date: '2026-11-10' }).tone, 'text-amber-300'); // 4 days
-    assert.equal(cycleCountdown({ start_date: '2026-11-01', end_date: '2026-11-20' }).tone, 'text-gold-400'); // 14 days
+    const now = Date.parse('2026-11-06T12:00:00Z');
+    assert.equal(cycleCountdown({ start_date: '2026-11-01', end_date: '2026-11-07' }, now).tone, 'text-rose-300'); // 1.5 days
+    assert.equal(cycleCountdown({ start_date: '2026-11-01', end_date: '2026-11-10' }, now).tone, 'text-amber-300'); // 4.5 days
+    assert.equal(cycleCountdown({ start_date: '2026-11-01', end_date: '2026-11-20' }, now).tone, 'text-gold-400'); // 14.5 days
+  });
+});
+
+describe('invite slots', () => {
+  test('slotInt clamps to 0-1000 and treats junk as 0', () => {
+    assert.equal(slotInt('35'), 35);
+    assert.equal(slotInt(''), 0);
+    assert.equal(slotInt('abc'), 0);
+    assert.equal(slotInt(-4), 0);
+    assert.equal(slotInt(99999), 1000);
+  });
+  test('presets match the game rules', () => {
+    assert.deepEqual([SLOT_PRESETS.ordinary.ordinary_slots, SLOT_PRESETS.ordinary.special_slots, SLOT_PRESETS.ordinary.open_slots], [35, 3, 20]);
+    assert.deepEqual([SLOT_PRESETS.leading.ordinary_slots, SLOT_PRESETS.leading.special_slots, SLOT_PRESETS.leading.open_slots], [20, 0, 10]);
+  });
+  test('inviteUsage counts assigned and left, ignoring rejected and untyped', () => {
+    const cycle = { ordinary_slots: 2, special_slots: 1, open_slots: 0 };
+    const ps = [
+      { invite_type: 'Ordinary', status: 'Committed' },
+      { invite_type: 'Ordinary', status: 'In Talks' },
+      { invite_type: 'Ordinary', status: 'Rejected' },
+      { invite_type: 'Open', status: 'In Talks' },
+      { invite_type: null, status: 'In Talks' },
+    ];
+    const u = inviteUsage(ps, cycle);
+    assert.deepEqual(u.rows.map((r) => [r.type, r.used, r.left]), [['Special', 0, 1], ['Ordinary', 2, 0], ['Open', 1, -1]]);
+    assert.equal(u.total, 3);
+    assert.equal(u.used, 3);
+    assert.equal(u.untyped, 1);
+  });
+  test('inviteUsage copes with a cycle that has no totals yet', () => {
+    assert.equal(inviteUsage([], undefined).total, 0);
   });
 });

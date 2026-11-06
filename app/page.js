@@ -5,6 +5,9 @@ import { supabase } from '@/lib/supabase';
 import AuthForm from '@/components/AuthForm';
 import Dashboard from '@/components/Dashboard';
 import MembersModal from '@/components/MembersModal';
+import NameForm from '@/components/NameForm';
+import ResetPassword from '@/components/ResetPassword';
+import { Modal } from '@/components/ui';
 
 export default function Home() {
   const [session, setSession] = useState(undefined); // undefined = still loading
@@ -12,6 +15,9 @@ export default function Home() {
   const [accessError, setAccessError] = useState('');
   const [pendingCount, setPendingCount] = useState(0);
   const [showMembers, setShowMembers] = useState(false);
+  const [showName, setShowName] = useState(false);
+  const [recovering, setRecovering] = useState(false); // opened a password-reset link from email
+  const [name, setName] = useState(null); // null = checking, '' = not chosen yet
   const [toast, setToast] = useState(null);
 
   const user = session?.user;
@@ -24,7 +30,10 @@ export default function Home() {
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data } = supabase.auth.onAuthStateChange((_evt, s) => setSession(s));
+    const { data } = supabase.auth.onAuthStateChange((evt, s) => {
+      setSession(s);
+      if (evt === 'PASSWORD_RECOVERY') setRecovering(true);
+    });
     return () => data.subscription.unsubscribe();
   }, []);
 
@@ -33,9 +42,12 @@ export default function Home() {
     setRole(null);
     const { data, error } = await supabase.rpc('request_access');
     if (error) { setAccessError(error.message); setRole('error'); return; }
+    const { data: me, error: meErr } = await supabase.from('members').select('display_name').eq('user_id', userId).maybeSingle();
+    if (meErr) { setAccessError(meErr.message); setRole('error'); return; }
     setAccessError('');
+    setName(me?.display_name || '');
     setRole(data);
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
     if (!userId) { setRole(null); return; }
@@ -57,12 +69,15 @@ export default function Home() {
   async function signOut() {
     await supabase.auth.signOut();
     setRole(null);
+    setName(null);
     setShowMembers(false);
+    setShowName(false);
   }
 
   if (session === undefined) return <p className="py-24 text-center text-slate-400">Loading…</p>;
   if (!session) return <AuthForm />;
-  if (role === null) return <p className="py-24 text-center text-slate-400">Checking access…</p>;
+  if (recovering) return <ResetPassword onDone={() => setRecovering(false)} />;
+  if (role === null || name === null) return <p className="py-24 text-center text-slate-400">Checking access…</p>;
 
   if (role === 'error') {
     return (
@@ -75,6 +90,19 @@ export default function Home() {
             <button className="btn-blue" onClick={checkAccess}>Try again</button>
             <button className="btn-ghost" onClick={signOut}>Sign out</button>
           </div>
+        </div>
+      </main>
+    );
+  }
+
+  // First login: everyone chooses the name that teammates and the audit log will show
+  if (!name) {
+    return (
+      <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-4">
+        <div className="card space-y-4 p-6">
+          <img src="/logo.png" alt="" className="mx-auto h-16 w-16 object-contain" />
+          <h2 className="text-center text-lg font-bold text-gold-400">Welcome! What should we call you?</h2>
+          <NameForm onSaved={setName} onSignOut={signOut} />
         </div>
       </main>
     );
@@ -101,27 +129,27 @@ export default function Home() {
   return (
     <>
       <Dashboard
-        headerEnd={(
-          <>
-            <button className="btn-ghost shrink-0" onClick={signOut}>Sign out</button>
-          </>
-        )}
-        headerExtra={role === 'admin' && (
-          <button className="btn-ghost shrink-0" onClick={() => setShowMembers(true)}>
-            👥 Members
-            {pendingCount > 0 && (
-              <span className="ml-1 rounded-full bg-amber-500 px-1.5 text-[10px] font-bold text-navy-950">{pendingCount}</span>
-            )}
-          </button>
-        )}
+        isAdmin={role === 'admin'}
+        userName={name}
+        menuItems={[
+          { label: 'Members', icon: '👥', onClick: () => setShowMembers(true), badge: role === 'admin' ? pendingCount : 0 },
+          { label: 'My name', icon: '✏️', onClick: () => setShowName(true) },
+          { label: 'Sign out', icon: '⏻', onClick: signOut, danger: true },
+        ]}
       />
 
       {showMembers && (
-        <MembersModal me={user} notify={notify} onClose={() => { setShowMembers(false); loadPending(); }} onChanged={loadPending} />
+        <MembersModal me={user} isAdmin={role === 'admin'} notify={notify} onClose={() => { setShowMembers(false); loadPending(); }} onChanged={loadPending} />
+      )}
+
+      {showName && (
+        <Modal title="Your name" onClose={() => setShowName(false)}>
+          <NameForm initial={name} onSaved={(n) => { setName(n); setShowName(false); notify('Name updated'); }} onCancel={() => setShowName(false)} />
+        </Modal>
       )}
 
       {toast && (
-        <div className={`fixed bottom-4 left-1/2 z-[70] w-[92%] max-w-md -translate-x-1/2 rounded-lg border px-4 py-3 text-sm shadow-xl ${toast.type === 'err' ? 'border-rose-500 bg-rose-950 text-rose-200' : 'border-emerald-500 bg-emerald-950 text-emerald-200'}`}>
+        <div role={toast.type === 'err' ? 'alert' : 'status'} aria-live="polite" className={`fixed bottom-4 left-1/2 z-[70] w-[92%] max-w-md -translate-x-1/2 rounded-lg border px-4 py-3 text-sm shadow-xl ${toast.type === 'err' ? 'border-rose-500 bg-rose-950 text-rose-200' : 'border-emerald-500 bg-emerald-950 text-emerald-200'}`}>
           {toast.msg}
         </div>
       )}

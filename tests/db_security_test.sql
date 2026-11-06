@@ -130,7 +130,7 @@ set local role authenticated;
 
 select public.zz_check('member: can read cycles',     public.zz_count($q$select 1 from kstransfers.cycles$q$)    >= 1);
 select public.zz_check('member: can read prospects',  public.zz_count($q$select 1 from kstransfers.prospects$q$) >= 1);
-select public.zz_check('member: can read the audit log', public.zz_count($q$select 1 from kstransfers.audit_log$q$) >= 1);
+select public.zz_check('member: cannot read the audit log (admin only)', public.zz_count($q$select 1 from kstransfers.audit_log$q$) = 0);
 select public.zz_check('member: cannot see other people''s membership rows', public.zz_count($q$select 1 from kstransfers.members$q$) = 1);
 
 select public.zz_check('member: can add a prospect',
@@ -190,6 +190,55 @@ select public.zz_check('audit: injection-looking text was stored verbatim and th
   exists (select 1 from kstransfers.prospects where ign like 'Robert%DROP TABLE%'));
 
 -- =====================================================================
+-- 4b) Display names and the members list (runs before the admin approves the pending user)
+-- =====================================================================
+select set_config('request.jwt.claims', '{"role":"anon"}', true);
+set local role anon;
+select public.zz_check('anon: cannot set a name', public.zz_try($q$select kstransfers.set_display_name('x')$q$) like 'err:%');
+select public.zz_check('anon: cannot list members', public.zz_try($q$select * from kstransfers.list_members()$q$) like 'err:%');
+reset role;
+
+-- member picks a name, and changes made afterwards are recorded under it
+select set_config('request.jwt.claims', '{"sub":"aaaaaaaa-0000-0000-0000-000000000002","email":"test_member@example.test","role":"authenticated"}', true);
+set local role authenticated;
+select public.zz_check('member: can set their own name', public.zz_try($q$select kstransfers.set_display_name('Member One')$q$) = 'ok:1');
+select public.zz_check('member: a 41-character name is rejected', public.zz_try($q$select kstransfers.set_display_name(repeat('x', 41))$q$) = 'err:P0001');
+select public.zz_check('member: an empty name is rejected', public.zz_try($q$select kstransfers.set_display_name('   ')$q$) = 'err:P0001');
+select public.zz_check('member: cannot write a name straight into the table',
+  public.zz_try($q$update kstransfers.members set display_name = 'Hacked' where user_id = 'aaaaaaaa-0000-0000-0000-000000000002'$q$) = 'ok:0');
+select public.zz_check('member: can list members', public.zz_count($q$select 1 from kstransfers.list_members()$q$) >= 2);
+select public.zz_check('member: sees no emails in the list', public.zz_count($q$select 1 from kstransfers.list_members() where email is not null$q$) = 0);
+select public.zz_check('member: sees no roles in the list', public.zz_count($q$select 1 from kstransfers.list_members() where role is not null$q$) = 0);
+select public.zz_check('member: pending people are not in the list',
+  public.zz_count($q$select 1 from kstransfers.list_members() where user_id = 'aaaaaaaa-0000-0000-0000-000000000003'$q$) = 0);
+select public.zz_check('member: can see their own name in the list',
+  public.zz_count($q$select 1 from kstransfers.list_members() where display_name = 'Member One'$q$) = 1);
+select public.zz_check('member: edit for the audit-name test',
+  public.zz_try($q$update kstransfers.prospects set notes = 'audit name test' where id = 'cccccccc-0000-0000-0000-000000000001'$q$) = 'ok:1');
+reset role;
+
+select public.zz_check('audit: shows the display name, not the email',
+  (select actor from kstransfers.audit_log where record_id = 'cccccccc-0000-0000-0000-000000000001' and action = 'UPDATE'
+     and changed ? 'notes' order by id desc limit 1) = 'Member One');
+
+-- pending user: can pick a name, but cannot use the members list
+select set_config('request.jwt.claims', '{"sub":"aaaaaaaa-0000-0000-0000-000000000003","email":"test_pending@example.test","role":"authenticated"}', true);
+set local role authenticated;
+select public.zz_check('pending: cannot list members', public.zz_try($q$select * from kstransfers.list_members()$q$) like 'err:%');
+select public.zz_check('pending: cannot take a name that is already used (any capitalisation)',
+  public.zz_try($q$select kstransfers.set_display_name('MEMBER ONE')$q$) = 'err:P0001');
+select public.zz_check('pending: can set a free name', public.zz_try($q$select kstransfers.set_display_name('Newcomer')$q$) = 'ok:1');
+reset role;
+
+-- admin: sees emails and pending people
+select set_config('request.jwt.claims', '{"sub":"aaaaaaaa-0000-0000-0000-000000000001","email":"test_admin@example.test","role":"authenticated"}', true);
+set local role authenticated;
+select public.zz_check('admin: sees emails in the list', public.zz_count($q$select 1 from kstransfers.list_members() where email is not null$q$) >= 3);
+select public.zz_check('admin: sees pending people in the list',
+  public.zz_count($q$select 1 from kstransfers.list_members() where role = 'pending'$q$) >= 1);
+reset role;
+
+-- =====================================================================
 -- 5) ADMIN
 -- =====================================================================
 -- make the test admin the only admin so the "last admin" guard can be tested
@@ -207,6 +256,7 @@ select public.zz_check('admin: cannot delete the last admin',
   public.zz_try($q$delete from kstransfers.members where user_id = 'aaaaaaaa-0000-0000-0000-000000000001'$q$) = 'err:P0001');
 select public.zz_check('admin: can remove a member',
   public.zz_try($q$delete from kstransfers.members where user_id = 'aaaaaaaa-0000-0000-0000-000000000004'$q$) = 'ok:1');
+select public.zz_check('admin: can read the audit log', public.zz_count($q$select 1 from kstransfers.audit_log$q$) >= 1);
 select public.zz_check('admin: still cannot edit the audit log',
   public.zz_try($q$update kstransfers.audit_log set summary = 'x'$q$) like 'err:%');
 reset role;

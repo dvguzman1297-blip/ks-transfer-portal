@@ -2,21 +2,49 @@
 @tailwind components;
 @tailwind utilities;
 
-html, body { background: #070b16; color: #e2e8f0; }
-body { background-image: radial-gradient(ellipse at top, #13203f 0%, #070b16 60%); background-attachment: fixed; min-height: 100vh; }
+/* Theme colours as "R G B" channels so Tailwind opacity modifiers (e.g. bg-navy-800/80) keep working. */
+:root {
+  color-scheme: dark;
+  --navy-950: 7 11 22;    --navy-900: 11 18 32;   --navy-800: 17 26 46;   --navy-700: 26 37 66;   --navy-600: 38 52 90;
+  --gold-300: 243 220 138; --gold-400: 230 195 92; --gold-500: 212 175 55; --gold-600: 184 147 42;
+  --slate-100: 241 245 249; --slate-200: 226 232 240; --slate-300: 203 213 225;
+  --slate-400: 148 163 184; --slate-500: 100 116 139; --slate-600: 71 85 105;
+  --rose-200: 254 205 211; --rose-300: 253 164 175; --rose-400: 251 113 133; --rose-950: 76 5 25;
+  --emerald-200: 167 243 208; --emerald-300: 110 231 183; --emerald-400: 52 211 153; --emerald-950: 2 44 34;
+  --amber-300: 252 211 77; --sky-300: 125 211 252; --fuchsia-300: 240 171 252;
+  --glow: 19 32 63;
+}
+:root[data-theme='light'] {
+  color-scheme: light;
+  --navy-950: 241 245 249; --navy-900: 255 255 255; --navy-800: 255 255 255; --navy-700: 226 232 240; --navy-600: 203 213 225;
+  --gold-300: 138 109 15;  --gold-400: 160 125 16;  --gold-500: 212 175 55;  --gold-600: 184 147 42;
+  --slate-100: 15 23 42;   --slate-200: 30 41 59;   --slate-300: 51 65 85;
+  --slate-400: 71 85 105;  --slate-500: 100 116 139; --slate-600: 148 163 184;
+  --rose-200: 159 18 57;   --rose-300: 190 18 60;   --rose-400: 225 29 72;   --rose-950: 255 228 230;
+  --emerald-200: 6 95 70;  --emerald-300: 4 120 87; --emerald-400: 5 150 105; --emerald-950: 209 250 229;
+  --amber-300: 180 83 9;   --sky-300: 3 105 161; --fuchsia-300: 162 28 175;
+  --glow: 224 231 245;
+}
+
+/* clearly visible keyboard focus (mouse clicks do not show it) */
+button:focus-visible, a:focus-visible, select:focus-visible, summary:focus-visible, [role='button']:focus-visible { outline: 2px solid rgb(var(--gold-400)); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { *, ::before, ::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; } }
+
+html, body { background: rgb(var(--navy-950)); color: rgb(var(--slate-200)); }
+body { background-image: radial-gradient(ellipse at top, rgb(var(--glow)) 0%, rgb(var(--navy-950)) 60%); background-attachment: fixed; min-height: 100vh; }
 
 @layer components {
   .card { @apply rounded-xl border border-gold-500/25 bg-navy-800/80 shadow-lg shadow-black/30; }
   .input { @apply w-full rounded-lg border border-navy-600 bg-navy-900 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-gold-500 focus:ring-1 focus:ring-gold-500; }
   .btn { @apply inline-flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50; }
   .btn-blue { @apply btn bg-blue-600 text-white hover:bg-blue-500; }
-  .btn-gold { @apply btn bg-gold-500 text-navy-950 hover:bg-gold-400; }
+  .btn-gold { @apply btn bg-gold-500 text-slate-950 hover:bg-gold-400; }
   .btn-ghost { @apply btn border border-navy-600 bg-navy-700/60 text-slate-200 hover:border-gold-500/60; }
   .label { @apply mb-1 block text-xs font-medium uppercase tracking-wide text-gold-400; }
 }
 
 /* visible, slim scrollbar for dropdown lists */
-.scroll-thin { scrollbar-width: thin; scrollbar-color: #d4af37 #0b1220; }
+.scroll-thin { scrollbar-width: thin; scrollbar-color: rgb(var(--gold-500)) rgb(var(--navy-900)); }
 .scroll-thin::-webkit-scrollbar { width: 8px; }
-.scroll-thin::-webkit-scrollbar-track { background: #0b1220; border-radius: 4px; }
-.scroll-thin::-webkit-scrollbar-thumb { background: #d4af37; border-radius: 4px; }
+.scroll-thin::-webkit-scrollbar-track { background: rgb(var(--navy-900)); border-radius: 4px; }
+.scroll-thin::-webkit-scrollbar-thumb { background: rgb(var(--gold-500)); border-radius: 4px; }

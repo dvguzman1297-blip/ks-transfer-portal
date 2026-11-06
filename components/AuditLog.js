@@ -10,7 +10,7 @@ const LABELS = {
   ign: 'IGN', player_id: 'Player ID', kingdom: 'Kingdom', power: 'Power', alliance: 'Current alliance',
   truegold_grade: 'TC level', assigned_alliance: 'Assigned to', invite_type: 'Invite type',
   recruiter: 'Recruiter', status: 'Status', notes: 'Notes', name: 'Name', start_date: 'Start date',
-  end_date: 'End date', role: 'Role',
+  end_date: 'End date', role: 'Role', display_name: 'Name', ordinary_slots: 'Ordinary invites', special_slots: 'Special invites', open_slots: 'Open slots', email: 'Email',
 };
 const HIDDEN = new Set(['id', 'user_id', 'approved_at', 'cycle_id', 'updated_at', 'created_at', 'target_kingdom', 'target_players', 'target_power', 'workspace_id']);
 
@@ -104,7 +104,8 @@ const csvEsc = (v) => {
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
-export default function AuditLog({ onClose, notify }) {
+export default function AuditLog({ onClose, notify, cycles = [], currentCycleId = '' }) {
+  const [fCycle, setFCycle] = useState(currentCycleId); // '' = all cycles
   const [rows, setRows] = useState([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -117,8 +118,9 @@ export default function AuditLog({ onClose, notify }) {
     let query = supabase.from('audit_log').select('*').order('at', { ascending: false }).order('id', { ascending: false });
     if (fTable) query = query.eq('table_name', fTable);
     if (fAction) query = query.eq('action', fAction);
+    if (fCycle && fTable !== 'members') query = query.eq('cycle_id', fCycle); // member changes belong to no cycle
     return query;
-  }, [fTable, fAction]);
+  }, [fTable, fAction, fCycle]);
 
   const load = useCallback(async (offset) => {
     setLoading(true);
@@ -179,6 +181,10 @@ export default function AuditLog({ onClose, notify }) {
 
       <div className="mb-3 flex flex-col gap-2 sm:flex-row">
         <input className="input min-w-0 sm:flex-1" placeholder="🔎 Search player, person, change…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <select className="input sm:w-48 sm:shrink-0" value={fCycle} onChange={(e) => setFCycle(e.target.value)} aria-label="Cycle">
+          <option value="">All cycles</option>
+          {cycles.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
         <select className="input sm:w-36 sm:shrink-0" value={fTable} onChange={(e) => setFTable(e.target.value)} aria-label="Type">
           <option value="">All types</option>
           <option value="prospects">Prospects</option>
