@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { lookupPlayer, makeLimiter } from '../../../lib/playerLookup.js';
+import { readJson } from '../../../lib/http.js';
+import { idText } from '../../../lib/requests.js';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,14 +26,10 @@ export async function POST(request) {
   if (!approved) return fail('Your account is not approved yet', 403);
   if (rateLimited(auth.user.id)) return fail('Too many lookups, please wait a minute', 429);
 
-  let body;
-  try {
-    body = await request.json();
-  } catch {
-    return fail('Invalid JSON body', 400);
-  }
+  const parsed = await readJson(request, 2000);
+  if (!parsed.ok) return fail(parsed.error, parsed.status);
 
-  const playerId = String(body?.playerId ?? '').trim();
+  const playerId = idText(parsed.body?.playerId);
   if (!/^\d{3,20}$/.test(playerId)) return fail('playerId must be a numeric Player ID', 400);
 
   const r = await lookupPlayer(playerId);

@@ -270,6 +270,74 @@ select public.zz_check('approved user can now read cycles', public.zz_count($q$s
 reset role;
 
 -- =====================================================================
+-- 7) PUBLIC TRANSFER REQUESTS (needs migration_transfer_requests.sql)
+-- =====================================================================
+select public.zz_check('requests: the migration is installed', to_regclass('kstransfers.transfer_requests') is not null);
+
+insert into kstransfers.transfer_requests (id, player_id, ign, transfer_passes, transfer_window, looking_for)
+  values ('dddddddd-0000-0000-0000-000000000001', '555666777', '__rls_request__', 3, 'Transfer 9', 'Casual / relaxed alliance');
+
+select set_config('request.jwt.claims', '{"role":"anon"}', true);
+set local role anon;
+select public.zz_check('requests: anon cannot read',   public.zz_count($q$select 1 from kstransfers.transfer_requests$q$) <= 0);
+select public.zz_check('requests: anon cannot insert (visitors go through the API route only)',
+  public.zz_try($q$insert into kstransfers.transfer_requests (player_id, ign, transfer_passes, transfer_window, looking_for) values ('123456','x',1,'x','x')$q$) like 'err:%');
+select public.zz_check('requests: anon cannot update',
+  public.zz_try($q$update kstransfers.transfer_requests set status = 'accepted'$q$) like 'err:%');
+select public.zz_check('requests: anon cannot delete',
+  public.zz_try($q$delete from kstransfers.transfer_requests$q$) like 'err:%');
+reset role;
+
+-- test_pending was approved in section 5, so use a fresh user who is still pending
+insert into auth.users (id, email) values ('aaaaaaaa-0000-0000-0000-000000000005', 'test_pending2@example.test');
+insert into kstransfers.members (user_id, email, role, approved_at)
+  values ('aaaaaaaa-0000-0000-0000-000000000005', 'test_pending2@example.test', 'pending', null);
+
+select set_config('request.jwt.claims', '{"sub":"aaaaaaaa-0000-0000-0000-000000000005","email":"test_pending2@example.test","role":"authenticated"}', true);
+set local role authenticated;
+select public.zz_check('requests: a pending user sees none', public.zz_count($q$select 1 from kstransfers.transfer_requests$q$) = 0);
+select public.zz_check('requests: a pending user cannot change them',
+  public.zz_try($q$update kstransfers.transfer_requests set status = 'accepted'$q$) = 'ok:0');
+select public.zz_check('requests: a pending user cannot delete them',
+  public.zz_try($q$delete from kstransfers.transfer_requests$q$) = 'ok:0');
+select public.zz_check('requests: a pending user cannot insert one',
+  public.zz_try($q$insert into kstransfers.transfer_requests (player_id, ign, transfer_passes, transfer_window, looking_for) values ('123456','x',1,'x','x')$q$) like 'err:%');
+reset role;
+
+select set_config('request.jwt.claims', '{"sub":"aaaaaaaa-0000-0000-0000-000000000002","email":"test_member@example.test","role":"authenticated"}', true);
+set local role authenticated;
+select public.zz_check('requests: a member can read them', public.zz_count($q$select 1 from kstransfers.transfer_requests$q$) >= 1);
+select public.zz_check('requests: a member can accept one',
+  public.zz_try($q$update kstransfers.transfer_requests set status = 'accepted' where id = 'dddddddd-0000-0000-0000-000000000001'$q$) = 'ok:1');
+select public.zz_check('requests: a member cannot insert one directly',
+  public.zz_try($q$insert into kstransfers.transfer_requests (player_id, ign, transfer_passes, transfer_window, looking_for) values ('123456','x',1,'x','x')$q$) like 'err:%');
+-- SQL-looking text is just text: stored as-is, nothing runs
+select public.zz_check('requests: injection-looking text is stored literally',
+  public.zz_try($q$update kstransfers.transfer_requests set message = '''); drop table kstransfers.cycles; --' where id = 'dddddddd-0000-0000-0000-000000000001'$q$) = 'ok:1');
+reset role;
+select public.zz_check('requests: injection text did not drop anything', to_regclass('kstransfers.cycles') is not null);
+
+-- the database refuses bad values even if the API route were bypassed (23514 = check violation, 23505 = unique)
+select public.zz_check('requests: rejects too many passes',
+  public.zz_try($q$insert into kstransfers.transfer_requests (player_id, ign, transfer_passes, transfer_window, looking_for) values ('888999000','x',100,'x','x')$q$) = 'err:23514');
+select public.zz_check('requests: rejects a non-numeric player id',
+  public.zz_try($q$insert into kstransfers.transfer_requests (player_id, ign, transfer_passes, transfer_window, looking_for) values ('abc','x',1,'x','x')$q$) = 'err:23514');
+select public.zz_check('requests: rejects an over-long note',
+  public.zz_try(format($q$insert into kstransfers.transfer_requests (player_id, ign, transfer_passes, transfer_window, looking_for, message) values ('888999001','x',1,'x','x','%s')$q$, repeat('a', 501))) = 'err:23514');
+select public.zz_check('requests: rejects an unknown status',
+  public.zz_try($q$insert into kstransfers.transfer_requests (player_id, ign, transfer_passes, transfer_window, looking_for, status) values ('888999002','x',1,'x','x','hacked')$q$) = 'err:23514');
+select public.zz_check('requests: one waiting request per player',
+  public.zz_try($q$insert into kstransfers.transfer_requests (player_id, ign, transfer_passes, transfer_window, looking_for) values ('888999003','x',1,'x','x'),('888999003','y',1,'x','x')$q$) = 'err:23505');
+
+-- the server (service role) can save a request and read cycles, and nothing more is needed
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+set local role service_role;
+select public.zz_check('requests: the service role can insert one',
+  public.zz_try($q$insert into kstransfers.transfer_requests (player_id, ign, transfer_passes, transfer_window, looking_for) values ('777000111','svc',1,'x','x')$q$) = 'ok:1');
+select public.zz_check('requests: the service role can read cycles', public.zz_count($q$select 1 from kstransfers.cycles$q$) >= 1);
+reset role;
+
+-- =====================================================================
 -- REPORT: ends with a deliberate error so that everything is rolled back
 -- =====================================================================
 do $t$
