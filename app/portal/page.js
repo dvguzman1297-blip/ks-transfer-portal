@@ -1,21 +1,26 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
-import AuthForm from '@/components/AuthForm';
 import Dashboard from '@/components/Dashboard';
 import dynamic from 'next/dynamic';
 import NameForm from '@/components/NameForm';
 import ResetPassword from '@/components/ResetPassword';
 import { Modal, PageSkeleton } from '@/components/ui';
 
+const RequestsModal = dynamic(() => import('@/components/RequestsModal'), { ssr: false });
 const MembersModal = dynamic(() => import('@/components/MembersModal'), { ssr: false });
 
 export default function Home() {
+  const router = useRouter();
   const [session, setSession] = useState(undefined); // undefined = still loading
   const [role, setRole] = useState(null); // null = checking, else 'admin' | 'member' | 'pending' | 'error'
   const [accessError, setAccessError] = useState('');
   const [pendingCount, setPendingCount] = useState(0);
+  const [requestCount, setRequestCount] = useState(0);
+  const [showRequests, setShowRequests] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const [showMembers, setShowMembers] = useState(false);
   const [showName, setShowName] = useState(false);
   const [recovering, setRecovering] = useState(false); // opened a password-reset link from email
@@ -71,16 +76,39 @@ export default function Home() {
     return () => clearInterval(t);
   }, [role, loadPending]);
 
+  const loadRequests = useCallback(async () => {
+    const { count } = await supabase.from('transfer_requests').select('id', { count: 'exact', head: true }).eq('status', 'new');
+    setRequestCount(count ?? 0);
+  }, []);
+
+  // Any approved member: count of new public requests, plus a live toast when one arrives
+  useEffect(() => {
+    if (role !== 'admin' && role !== 'member') return;
+    loadRequests();
+    const channel = supabase.channel('transfer-requests')
+      .on('postgres_changes', { event: 'INSERT', schema: 'kstransfers', table: 'transfer_requests' }, (payload) => {
+        notify(`New transfer request from ${payload.new?.ign || 'a player'}`);
+        loadRequests();
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'kstransfers', table: 'transfer_requests' }, loadRequests)
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [role, loadRequests, notify]);
+
   async function signOut() {
     await supabase.auth.signOut();
     setRole(null);
     setName(null);
     setShowMembers(false);
+    setShowRequests(false);
     setShowName(false);
+    router.replace('/');
   }
 
-  if (session === undefined) return <PageSkeleton />;
-  if (!session) return <AuthForm />;
+  // not signed in (or just signed out): the login lives on the landing page
+  useEffect(() => { if (session === null) router.replace('/'); }, [session, router]);
+
+  if (session === undefined || !session) return <PageSkeleton />;
   if (recovering) return <ResetPassword onDone={() => setRecovering(false)} />;
   if (role === null || name === null) return <PageSkeleton />;
 
@@ -136,12 +164,18 @@ export default function Home() {
       <Dashboard
         isAdmin={role === 'admin'}
         userName={name}
+        reloadKey={reloadKey}
+        requests={{ count: requestCount, onOpen: () => setShowRequests(true) }}
         menuItems={[
           { label: 'Members', icon: '👥', onClick: () => setShowMembers(true), badge: role === 'admin' ? pendingCount : 0 },
           { label: 'My name', icon: '✏️', onClick: () => setShowName(true) },
           { label: 'Sign out', icon: '⏻', onClick: signOut, danger: true },
         ]}
       />
+
+      {showRequests && (
+        <RequestsModal notify={notify} onClose={() => setShowRequests(false)} onChanged={loadRequests} onAccepted={() => setReloadKey((k) => k + 1)} />
+      )}
 
       {showMembers && (
         <MembersModal me={user} isAdmin={role === 'admin'} notify={notify} onClose={() => { setShowMembers(false); loadPending(); }} onChanged={loadPending} />

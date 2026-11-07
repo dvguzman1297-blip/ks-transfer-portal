@@ -39,15 +39,17 @@ const securityHeaders = [
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  distDir: process.env.NEXT_DIST_DIR || '.next', // lets a check build run without disturbing a running dev server
   reactStrictMode: true,
   poweredByHeader: false,
   async headers() {
     return [
       { source: '/:path*', headers: securityHeaders },
-      // fingerprinted build files never change: cache for a year
-      { source: '/_next/static/:path*', headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }] },
+      // fingerprinted build files never change: cache for a year (production only; in dev the
+      // file names are NOT fingerprinted, so this would pin stale CSS/JS in the browser)
+      ...(isProd ? [{ source: '/_next/static/:path*', headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }] }] : []),
       // un-fingerprinted images: cache a day, serve stale while refreshing so updates still arrive
-      { source: '/:file(logo.png|icon.png|apple-icon.png)', headers: [{ key: 'Cache-Control', value: 'public, max-age=86400, stale-while-revalidate=604800' }] },
+      ...(isProd ? [{ source: '/:file(logo.png|icon.png|apple-icon.png)', headers: [{ key: 'Cache-Control', value: 'public, max-age=86400, stale-while-revalidate=604800' }] }] : []),
       // the lookup proxy returns per-user data: never cache
       { source: '/api/:path*', headers: [{ key: 'Cache-Control', value: 'no-store' }] },
     ];

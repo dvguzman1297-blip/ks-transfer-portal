@@ -15,7 +15,7 @@ export default function RootLayout({ children }) {
       <head><script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} /></head>
       <body>
         {children}
-        <footer className="px-4 py-6 text-center text-xs text-slate-500">
+        <footer className="px-4 py-5 text-center text-xs text-slate-500">
           <p>© 2026 j3ttybear. All rights reserved.</p>
           <p className="mt-1">Game assets and data are the property of their respective owners.</p>
         </footer>

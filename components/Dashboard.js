@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import dynamic from 'next/dynamic';
 import HeaderMenu from './HeaderMenu';
+import { ALLIANCES } from '@/lib/alliances';
 import { Combobox, DashboardSkeleton, Modal, useConfirm } from './ui';
 
 // Only admins open this, so keep it out of the main bundle
@@ -14,15 +15,6 @@ import {
   fmt, parsePower, digits, fmtShort, toCSV, parseCSV, normalizeImportRows, templateCSV,
 } from '@/lib/utils';
 
-// Alliances prospects can be assigned to (stored as the tag). Edit this list as alliances change.
-const ALLIANCES = [
-  { tag: 'OPEN', name: '' },
-  { tag: 'D86', name: 'DRAGONS' },
-  { tag: 'W86', name: 'WIN' },
-  { tag: 'A86', name: 'ApexPredators' },
-  { tag: 'KTA', name: 'KiLLThemALL' },
-  { tag: 'T86', name: 'GemstoneTavern' },
-];
 // Number inputs for a cycle's invite totals, plus one-click presets for the two kingdom types
 function SlotFields({ value, onChange }) {
   const total = SLOT_FIELDS.reduce((n, [, f]) => n + slotInt(value[f]), 0);
@@ -109,7 +101,7 @@ function Stat({ label, value, sub, accent }) {
 }
 
 /* ---------- Page ---------- */
-export default function Dashboard({ menuItems = [], isAdmin = false, userName = '' }) {
+export default function Dashboard({ menuItems = [], isAdmin = false, userName = '', reloadKey = 0, requests = null }) {
   const [cycles, setCycles] = useState([]);
   const [cycleId, setCycleId] = useState('');
   const [prospects, setProspects] = useState([]);
@@ -190,7 +182,7 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
 
   useEffect(() => { loadCycles(); }, [loadCycles]);
 
-  useEffect(() => { loadProspects(cycleId); }, [cycleId, loadProspects]);
+  useEffect(() => { loadProspects(cycleId); }, [cycleId, loadProspects, reloadKey]);
   useEffect(() => { if (showCycles) loadStats(); }, [showCycles, loadStats]);
 
   /* ----- cycles ----- */
@@ -556,6 +548,13 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
             ))}
           </select>
           <button className="btn-gold shrink-0" onClick={() => setShowCycles(true)}>Manage Cycles</button>
+          {requests && (
+            <button className="btn-ghost relative shrink-0" onClick={requests.onOpen}
+              aria-label={`Transfer requests${requests.count ? `, ${requests.count} new` : ''}`}>
+              <span aria-hidden="true">📥</span> Requests
+              {requests.count > 0 && <span className="ml-1 rounded-full bg-amber-500 px-1.5 text-[10px] font-bold text-slate-950">{requests.count}</span>}
+            </button>
+          )}
           {/* pinned to the top-right corner on phones, inline on larger screens */}
           <div className="absolute right-0 top-0 sm:static">
             <HeaderMenu items={[

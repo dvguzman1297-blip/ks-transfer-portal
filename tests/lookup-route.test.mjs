@@ -183,3 +183,31 @@ describe('rate limiting', () => {
     assert.equal((await call({ playerId: '290313686' })).status, 200);
   });
 });
+
+describe('outdated Next-Action id', () => {
+  test('re-discovers the id from the site and retries', async () => {
+    const real = globalThis.fetch;
+    const NEW = 'a'.repeat(42);
+    const seen = [];
+    globalThis.fetch = async (input, init = {}) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url.startsWith('https://kingshot.net/') && init.method === 'POST') {
+        seen.push(init.headers['Next-Action']);
+        if (init.headers['Next-Action'] !== NEW) return new Response('Server action not found.', { status: 404 });
+        return new Response(RSC_OK(PLAYER), { status: 200 });
+      }
+      if (url === 'https://kingshot.net/gift-codes/redeem') return new Response('<script src="/_next/static/chunks/app/%5Blocale%5D/(public)/gift-codes/redeem/page-abc123.js">', { status: 200 });
+      if (url.includes('/gift-codes/redeem/page-abc123.js')) return new Response(`x.createServerReference)("${NEW}",r.callServer,void 0,r.findSourceMapURL,"lookupPlayer")`, { status: 200 });
+      return real(input, init);
+    };
+    try {
+      const r = await read(await call({ playerId: '290313686' }));
+      assert.equal(r.status, 200);
+      assert.equal(r.body.data.ign, 'j3ttybear');
+      assert.equal(seen.at(-1), NEW);
+      assert.ok(seen.length >= 2, 'tried the old id first, then the discovered one');
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+});
