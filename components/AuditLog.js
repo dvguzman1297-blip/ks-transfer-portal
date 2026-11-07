@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Modal } from './ui';
+import { ListSkeleton, Modal } from './ui';
 
 const PAGE = 100;
 
@@ -210,7 +210,7 @@ export default function AuditLog({ onClose, notify, cycles = [], currentCycleId 
       {!loading && !error && !shown.length && (
         <p className="py-8 text-center text-sm text-slate-500">{rows.length ? 'No entries match your search.' : 'No activity recorded yet.'}</p>
       )}
-      {loading && <p className="py-4 text-center text-sm text-slate-500">Loading…</p>}
+      {loading && <ListSkeleton rows={rows.length ? 2 : 6} className="py-2" />}
       {hasMore && !loading && (
         <button className="btn-ghost mt-3 w-full" onClick={() => load(rows.length)}>Load older entries</button>
       )}

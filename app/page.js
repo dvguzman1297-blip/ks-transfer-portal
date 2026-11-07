@@ -4,10 +4,12 @@ import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import AuthForm from '@/components/AuthForm';
 import Dashboard from '@/components/Dashboard';
-import MembersModal from '@/components/MembersModal';
+import dynamic from 'next/dynamic';
 import NameForm from '@/components/NameForm';
 import ResetPassword from '@/components/ResetPassword';
-import { Modal } from '@/components/ui';
+import { Modal, PageSkeleton } from '@/components/ui';
+
+const MembersModal = dynamic(() => import('@/components/MembersModal'), { ssr: false });
 
 export default function Home() {
   const [session, setSession] = useState(undefined); // undefined = still loading
@@ -40,9 +42,12 @@ export default function Home() {
   // Ask the database what this account may do (creates a pending request, or the first admin)
   const checkAccess = useCallback(async () => {
     setRole(null);
-    const { data, error } = await supabase.rpc('request_access');
+    // independent queries: run them together instead of one after the other
+    const [{ data, error }, { data: me, error: meErr }] = await Promise.all([
+      supabase.rpc('request_access'),
+      supabase.from('members').select('display_name').eq('user_id', userId).maybeSingle(),
+    ]);
     if (error) { setAccessError(error.message); setRole('error'); return; }
-    const { data: me, error: meErr } = await supabase.from('members').select('display_name').eq('user_id', userId).maybeSingle();
     if (meErr) { setAccessError(meErr.message); setRole('error'); return; }
     setAccessError('');
     setName(me?.display_name || '');
@@ -74,10 +79,10 @@ export default function Home() {
     setShowName(false);
   }
 
-  if (session === undefined) return <p className="py-24 text-center text-slate-400">Loading…</p>;
+  if (session === undefined) return <PageSkeleton />;
   if (!session) return <AuthForm />;
   if (recovering) return <ResetPassword onDone={() => setRecovering(false)} />;
-  if (role === null || name === null) return <p className="py-24 text-center text-slate-400">Checking access…</p>;
+  if (role === null || name === null) return <PageSkeleton />;
 
   if (role === 'error') {
     return (

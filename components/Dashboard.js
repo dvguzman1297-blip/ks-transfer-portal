@@ -2,9 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
-import AuditLog from './AuditLog';
+import dynamic from 'next/dynamic';
 import HeaderMenu from './HeaderMenu';
-import { Combobox, Modal, useConfirm } from './ui';
+import { Combobox, DashboardSkeleton, Modal, useConfirm } from './ui';
+
+// Only admins open this, so keep it out of the main bundle
+const AuditLog = dynamic(() => import('./AuditLog'), { ssr: false });
 import {
   INVITE_TYPES, STATUSES, STALE_DAYS, MAX_IMPORT_BYTES, CSV_COLS,
   isFollowUp, isUnassigned, freshCycle, rangeLabel, cycleCountdown, SLOT_PRESETS, SLOT_FIELDS, slotInt, inviteUsage,
@@ -594,7 +597,7 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
       </div>
 
       {loading ? (
-        <p className="py-20 text-center text-slate-400">Loading…</p>
+        <DashboardSkeleton />
       ) : !cycles.length ? (
         <div className="card mx-auto max-w-md p-6 text-center">
           <p className="mb-4 text-slate-300">No transfer cycles yet. Create your first one to start tracking prospects.</p>
@@ -847,7 +850,8 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
                           {STATUSES.map((s) => <option key={s} className="bg-navy-900 text-slate-100">{s}</option>)}
                         </select>
                       </td>
-                      <td className="max-w-[16rem] truncate px-3 py-2 text-slate-400" title={p.notes || ''}>{p.notes}</td>                    </tr>
+                      <td className="max-w-[16rem] truncate px-3 py-2 text-slate-400" title={p.notes || ''}>{p.notes}</td>
+                    </tr>
                   ))}
                   {!visible.length && (
                     <tr><td colSpan={11} className="px-3 py-10 text-center text-slate-500">

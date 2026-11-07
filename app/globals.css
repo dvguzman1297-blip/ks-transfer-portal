@@ -48,3 +48,7 @@ body { background-image: radial-gradient(ellipse at top, rgb(var(--glow)) 0%, rg
 .scroll-thin::-webkit-scrollbar { width: 8px; }
 .scroll-thin::-webkit-scrollbar-track { background: rgb(var(--navy-900)); border-radius: 4px; }
 .scroll-thin::-webkit-scrollbar-thumb { background: rgb(var(--gold-500)); border-radius: 4px; }
+
+/* skeleton loaders */
+.skeleton { @apply rounded-md bg-navy-700; animation: skeleton-pulse 1.4s ease-in-out infinite; }
+@keyframes skeleton-pulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 0.9; } }

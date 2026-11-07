@@ -160,3 +160,67 @@ export function Combobox({ value, onChange, options, placeholder, ariaLabel, max
     </div>
   );
 }
+
+/* ---------- Skeleton loaders ---------- */
+export function Skeleton({ className = '' }) {
+  return <div aria-hidden="true" className={`skeleton ${className}`} />;
+}
+
+// Placeholder shaped like the dashboard (header, summary card, roster rows) while data loads.
+export function DashboardSkeleton() {
+  return (
+    <div role="status" aria-busy="true" aria-label="Loading prospects">
+      <section className="card mb-5 flex flex-col gap-4 p-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <Skeleton className="h-4 w-44" />
+          <Skeleton className="h-6 w-56" />
+        </div>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
+          {Array.from({ length: 5 }, (_, i) => <Skeleton key={i} className="h-12 rounded-lg" />)}
+        </div>
+        <div className="grid grid-cols-1 gap-x-10 gap-y-5 border-t border-navy-700 pt-4 lg:grid-cols-2">
+          <div className="space-y-3">
+            <Skeleton className="h-3 w-20" />
+            {Array.from({ length: 3 }, (_, i) => <Skeleton key={i} className="h-6 w-full" />)}
+          </div>
+          <div className="space-y-3">
+            <Skeleton className="h-3 w-32" />
+            {Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-6 w-full" />)}
+          </div>
+        </div>
+      </section>
+      <section className="card p-3 sm:p-5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <Skeleton className="h-6 w-48" />
+          <Skeleton className="h-9 w-72 max-w-full" />
+        </div>
+        <Skeleton className="mb-3 h-9 w-full" />
+        <ListSkeleton rows={8} />
+      </section>
+    </div>
+  );
+}
+
+export function ListSkeleton({ rows = 5, className = '' }) {
+  return (
+    <div role="status" aria-busy="true" aria-label="Loading" className={`space-y-2 ${className}`}>
+      {Array.from({ length: rows }, (_, i) => <Skeleton key={i} className="h-10 w-full" />)}
+    </div>
+  );
+}
+
+// Full-page placeholder used while the session and access are being checked.
+export function PageSkeleton() {
+  return (
+    <main className="mx-auto w-full max-w-[1800px] px-3 py-4 sm:px-6 sm:py-6 2xl:px-10">
+      <div className="mb-5 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <Skeleton className="h-9 w-9 rounded-full" />
+          <div className="space-y-2"><Skeleton className="h-6 w-56" /><Skeleton className="h-3 w-40" /></div>
+        </div>
+        <Skeleton className="hidden h-9 w-64 sm:block" />
+      </div>
+      <DashboardSkeleton />
+    </main>
+  );
+}

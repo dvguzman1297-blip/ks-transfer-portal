@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Modal, useConfirm } from './ui';
+import { ListSkeleton, Modal, useConfirm } from './ui';
 
 const ROLE_LABEL = { admin: 'Admin', member: 'Member', pending: 'Pending' };
 const UNNAMED = 'No name set yet';
@@ -56,7 +56,7 @@ export default function MembersModal({ me, isAdmin, onClose, onChanged, notify }
   if (!isAdmin) {
     return (
       <Modal title="Members" onClose={onClose}>
-        {loading && <p className="text-sm text-slate-500">Loading…</p>}
+        {loading && <ListSkeleton rows={4} />}
         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gold-400">Members ({members.length})</h3>
         <ul className="space-y-2">
           {members.map((m) => (
@@ -73,7 +73,7 @@ export default function MembersModal({ me, isAdmin, onClose, onChanged, notify }
 
   return (
     <Modal title="Members & access" onClose={onClose}>
-      {loading && <p className="text-sm text-slate-500">Loading…</p>}
+      {loading && <ListSkeleton rows={4} />}
 
       {pending.length > 0 && (
         <section className="mb-5">
