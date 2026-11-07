@@ -1,8 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
-import { LOOKING_FOR, MAX_PASSES, TRANSFER_WINDOWS } from '@/lib/requests';
+import { useEffect, useState } from 'react';
+import { LOOKING_FOR, MAX_PASSES, NEXT, NOT_SURE, UNSURE } from '@/lib/requests';
 import { fmt, parsePower } from '@/lib/utils';
 
 async function post(url, body) {
@@ -12,7 +12,7 @@ async function post(url, body) {
   return j;
 }
 
-const EMPTY = { transferPasses: '', transferWindow: '', lookingFor: '', contacted: null, contactedWho: '', contactHandle: '', message: '' };
+const EMPTY = { transferPasses: '', cycleId: '', lookingFor: '', contacted: null, contactedWho: '', contactHandle: '', message: '' };
 
 export default function RequestPage() {
   const [playerId, setPlayerId] = useState('');
@@ -22,6 +22,13 @@ export default function RequestPage() {
   const [error, setError] = useState('');
   const [done, setDone] = useState(false);
   const set = (k, v) => setF((o) => ({ ...o, [k]: v }));
+
+  // the transfer windows to choose from are the portal's open cycles
+  const [windows, setWindows] = useState([]);
+  const [nextLabel, setNextLabel] = useState('');
+  useEffect(() => {
+    fetch('/api/transfer-windows').then((r) => r.json()).then((j) => { if (j.success) { setWindows(j.windows); setNextLabel(j.next?.label || ''); } }).catch(() => {});
+  }, []);
 
   async function lookup(e) {
     e.preventDefault();
@@ -98,9 +105,11 @@ export default function RequestPage() {
 
         <div>
           <label className="label" htmlFor="win">Which transfer window are you planning to move?</label>
-          <select id="win" className="input" required value={f.transferWindow} onChange={(e) => set('transferWindow', e.target.value)}>
+          <select id="win" className="input" required value={f.cycleId} onChange={(e) => set('cycleId', e.target.value)}>
             <option value="">Choose…</option>
-            {TRANSFER_WINDOWS.map((w) => <option key={w}>{w}</option>)}
+            {windows.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+            {nextLabel && <option value={NEXT}>{nextLabel}</option>}
+            <option value={UNSURE}>{NOT_SURE}</option>
           </select>
         </div>
 

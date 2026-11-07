@@ -57,3 +57,20 @@ do $$ begin
   alter publication supabase_realtime add table kstransfers.transfer_requests;
 exception when duplicate_object then null;
 end $$;
+
+-- ---------------------------------------------------------------------
+-- Link a request to the cycle (transfer window) the player picked. Safe to re-run.
+-- cycle_id is null when the player chose "Not sure yet" or the cycle was deleted later.
+-- ---------------------------------------------------------------------
+alter table kstransfers.transfer_requests add column if not exists cycle_id uuid references kstransfers.cycles(id) on delete set null;
+create index if not exists transfer_requests_cycle_idx on kstransfers.transfer_requests (cycle_id);
+
+-- /api/request and /api/transfer-windows read the open cycles with the service-role key
+grant select on kstransfers.cycles to service_role;
+
+-- ---------------------------------------------------------------------
+-- "Next window" requests: the player picked the window after the latest open cycle, which may not exist yet.
+-- after_date = start date of the latest open cycle at submission (or the submission date if none was open).
+-- The request belongs to the earliest cycle that starts after that date. Null for every other request.
+-- ---------------------------------------------------------------------
+alter table kstransfers.transfer_requests add column if not exists after_date date;

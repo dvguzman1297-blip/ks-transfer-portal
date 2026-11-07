@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   parsePower, fmtShort, fmt, digits, csvSafe, clip, toCSV, parseCSV, normalizeImportRows,
   isFollowUp, isUnassigned, parseLocalDate, isoDate, freshCycle, rangeLabel, cycleCountdown,
-  MAX_IMPORT_ROWS, STATUSES, slotInt, inviteUsage, SLOT_PRESETS, templateCSV, TEMPLATE_MARK, CSV_COLS,
+  MAX_IMPORT_ROWS, STATUSES, cycleName, nextCycleNumber, suggestNextCycle, nextCycleNudge, slotInt, inviteUsage, SLOT_PRESETS, templateCSV, TEMPLATE_MARK, CSV_COLS,
 } from '../lib/utils.js';
 
 describe('parsePower', () => {
@@ -323,5 +323,35 @@ describe('import template', () => {
     assert.equal(out[1].power, 95000000);
     assert.deepEqual(out.map((r) => r.status), ['In Talks', 'Not Contacted']);
     assert.deepEqual(out.map((r) => r.invite_type), ['Ordinary', 'Open']);
+  });
+});
+
+describe('next cycle suggestion', () => {
+  const cycles = [
+    { name: 'Transfer 8 - Sep. 13-19, 2026', start_date: '2026-09-13', end_date: '2026-09-19', ordinary_slots: 35, special_slots: 3, open_slots: 20 },
+    { name: 'Transfer 9 - Nov. 8-14, 2026', start_date: '2026-11-08', end_date: '2026-11-14', ordinary_slots: 30, special_slots: 2, open_slots: 10 },
+  ];
+  test('names cycles in the existing style, including across months and years', () => {
+    assert.equal(cycleName(9, '2026-11-08', '2026-11-14'), 'Transfer 9 - Nov. 8-14, 2026');
+    assert.equal(cycleName(10, '2026-11-29', '2026-12-05'), 'Transfer 10 - Nov. 29-Dec. 5, 2026');
+    assert.equal(cycleName(11, '2026-12-27', '2027-01-02'), 'Transfer 11 - Dec. 27, 2026-Jan. 2, 2027');
+  });
+  test('numbers the next cycle from the highest existing number', () => {
+    assert.equal(nextCycleNumber(cycles), 10);
+    assert.equal(nextCycleNumber([{ name: 'Transfer Cycle #12' }]), 13);
+    assert.equal(nextCycleNumber([{ name: 'Spring' }, { name: 'Summer' }]), 3);
+  });
+  test('suggests 8 weeks (or 6) after the latest start, with the same invite totals', () => {
+    assert.deepEqual(suggestNextCycle(cycles), {
+      name: 'Transfer 10 - Jan. 3-9, 2027', start_date: '2027-01-03', end_date: '2027-01-09', ordinary_slots: 30, special_slots: 2, open_slots: 10,
+    });
+    assert.equal(suggestNextCycle(cycles, 6).start_date, '2026-12-20');
+    assert.equal(suggestNextCycle([]), null);
+  });
+  test('reminds once the latest cycle has ended or is about to', () => {
+    assert.equal(nextCycleNudge(cycles, '2026-11-10'), null);
+    assert.equal(nextCycleNudge(cycles, '2026-11-12').daysLeft, 2);
+    assert.equal(nextCycleNudge(cycles, '2026-11-15').ended, true);
+    assert.equal(nextCycleNudge([], '2026-11-15'), null);
   });
 });

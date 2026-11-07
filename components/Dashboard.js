@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import dynamic from 'next/dynamic';
+import Link from 'next/link';
 import HeaderMenu from './HeaderMenu';
 import { ALLIANCES } from '@/lib/alliances';
 import { Combobox, DashboardSkeleton, Modal, useConfirm } from './ui';
@@ -12,7 +13,7 @@ const AuditLog = dynamic(() => import('./AuditLog'), { ssr: false });
 import {
   INVITE_TYPES, STATUSES, STALE_DAYS, MAX_IMPORT_BYTES, CSV_COLS,
   isFollowUp, isUnassigned, freshCycle, rangeLabel, cycleCountdown, SLOT_PRESETS, SLOT_FIELDS, slotInt, inviteUsage,
-  fmt, parsePower, digits, fmtShort, toCSV, parseCSV, normalizeImportRows, templateCSV,
+  fmt, parsePower, digits, fmtShort, toCSV, parseCSV, normalizeImportRows, templateCSV, suggestNextCycle, nextCycleNudge,
 } from '@/lib/utils';
 
 // Number inputs for a cycle's invite totals, plus one-click presets for the two kingdom types
@@ -101,7 +102,7 @@ function Stat({ label, value, sub, accent }) {
 }
 
 /* ---------- Page ---------- */
-export default function Dashboard({ menuItems = [], isAdmin = false, userName = '', reloadKey = 0, requests = null }) {
+export default function Dashboard({ menuItems = [], isAdmin = false, userName = '', reloadKey = 0, requests = null, nextCycleSignal = 0 }) {
   const [cycles, setCycles] = useState([]);
   const [cycleId, setCycleId] = useState('');
   const [prospects, setProspects] = useState([]);
@@ -120,6 +121,8 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
   const [showAudit, setShowAudit] = useState(false);
   const [newCycle, setNewCycle] = useState(freshCycle);
   const [showNewCycle, setShowNewCycle] = useState(false);
+  const [suggestWeeks, setSuggestWeeks] = useState(null); // 8 | 6 while the new-cycle form holds a suggestion
+  const [nudgeHidden, setNudgeHidden] = useState(false);
 
   const [search, setSearch] = useState('');
   const [quick, setQuick] = useState(''); // '' | 'followup' | 'unassigned'
@@ -186,6 +189,20 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
   useEffect(() => { if (showCycles) loadStats(); }, [showCycles, loadStats]);
 
   /* ----- cycles ----- */
+  // Open the new-cycle form pre-filled from the latest cycle (windows are usually 8 weeks apart, sometimes 6)
+  function openNextCycle(weeks = 8) {
+    const s = suggestNextCycle(cycles, weeks);
+    setNewCycle(s || freshCycle());
+    setSuggestWeeks(s ? weeks : null);
+    setShowNewCycle(true);
+    setShowCycles(true);
+  }
+  // the requests inbox asks for the next cycle to be created
+  const handledSignal = useRef(0);
+  useEffect(() => {
+    if (nextCycleSignal > handledSignal.current && !loading) { handledSignal.current = nextCycleSignal; openNextCycle(8); }
+  }, [nextCycleSignal, loading]); // eslint-disable-line react-hooks/exhaustive-deps
+
   async function createCycle(e) {
     e.preventDefault();
     if (!newCycle.name.trim()) return;
@@ -200,6 +217,7 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
     }).select().single();
     if (error) return notify(error.message, 'err');
     setNewCycle(freshCycle());
+    setSuggestWeeks(null);
     setShowNewCycle(false);
     await loadCycles(data.id);
     loadStats();
@@ -425,6 +443,9 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
     return () => clearInterval(t);
   }, []);
   const countdown = cycleCountdown(currentCycle, now);
+  const nudge = useMemo(() => nextCycleNudge(cycles), [cycles]);
+  // players who asked for the "next window" and no cycle starting after their date exists yet
+  const waitingForNext = (requests?.nextWaiting || []).filter((d) => !cycles.some((c) => c.start_date > d)).length;
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -549,11 +570,11 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
           </select>
           <button className="btn-gold shrink-0" onClick={() => setShowCycles(true)}>Manage Cycles</button>
           {requests && (
-            <button className="btn-ghost relative shrink-0" onClick={requests.onOpen}
+            <Link href="/portal/requests" className="btn-ghost relative shrink-0"
               aria-label={`Transfer requests${requests.count ? `, ${requests.count} new` : ''}`}>
               <span aria-hidden="true">📥</span> Requests
               {requests.count > 0 && <span className="ml-1 rounded-full bg-amber-500 px-1.5 text-[10px] font-bold text-slate-950">{requests.count}</span>}
-            </button>
+            </Link>
           )}
           {/* pinned to the top-right corner on phones, inline on larger screens */}
           <div className="absolute right-0 top-0 sm:static">
@@ -564,6 +585,21 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
           </div>
         </div>
       </header>
+
+      {!loading && (nudge || waitingForNext > 0) && !nudgeHidden && (
+        <div role="status" className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+          <span>
+            {nudge && (nudge.ended
+              ? <><b>{nudge.cycle.name}</b> has ended and there is no later cycle yet.</>
+              : <><b>{nudge.cycle.name}</b> ends {nudge.daysLeft === 0 ? 'today' : `in ${nudge.daysLeft} day${nudge.daysLeft === 1 ? '' : 's'}`} and the next cycle is not created yet.</>)}
+            {waitingForNext > 0 && <>{nudge ? ' ' : ''}<b>{waitingForNext} player{waitingForNext === 1 ? ' is' : 's are'}</b> waiting for the next cycle.</>}
+          </span>
+          <span className="flex gap-2">
+            <button className="btn-gold px-3 py-1" onClick={() => openNextCycle(8)}>Create next cycle</button>
+            <button className="btn-ghost px-3 py-1" onClick={() => setNudgeHidden(true)} aria-label="Dismiss reminder">Later</button>
+          </span>
+        </div>
+      )}
 
       <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-lg font-bold text-slate-100 sm:text-xl">
@@ -952,16 +988,31 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
 
 
       {showCycles && (
-        <Modal title="Manage Transfer Cycles" onClose={() => { setShowCycles(false); setShowNewCycle(false); setDateEdit(null); }}>
+        <Modal title="Manage Transfer Cycles" onClose={() => { setShowCycles(false); setShowNewCycle(false); setSuggestWeeks(null); setDateEdit(null); }}>
           <div className="mb-3 flex items-center justify-between">
             <p className="text-xs text-slate-400">{cycles.length} cycle{cycles.length === 1 ? '' : 's'} · the open cycle is highlighted</p>
-            <button className={showNewCycle ? 'btn-ghost' : 'btn-blue'} onClick={() => setShowNewCycle((v) => !v)}>
-              {showNewCycle ? 'Cancel' : '+ New cycle'}
-            </button>
+            <div className="flex gap-2">
+              {!showNewCycle && cycles.length > 0 && (
+                <button className="btn-gold" onClick={() => openNextCycle(8)} title="Pre-filled from the latest cycle">Next cycle ›</button>
+              )}
+              <button className={showNewCycle ? 'btn-ghost' : 'btn-blue'}
+                onClick={() => { if (showNewCycle) { setShowNewCycle(false); setSuggestWeeks(null); } else { setNewCycle(freshCycle()); setSuggestWeeks(null); setShowNewCycle(true); } }}>
+                {showNewCycle ? 'Cancel' : '+ New cycle'}
+              </button>
+            </div>
           </div>
 
           {(showNewCycle || !cycles.length) && (
             <form onSubmit={createCycle} className="mb-5 grid grid-cols-1 gap-3 rounded-lg border border-gold-500/30 bg-navy-900/60 p-3 sm:grid-cols-2">
+              {suggestWeeks && (
+                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400 sm:col-span-2">
+                  <span>Suggested from the latest cycle. Check the dates against the announcement.</span>
+                  {[8, 6].map((w) => (
+                    <button type="button" key={w} aria-pressed={suggestWeeks === w} onClick={() => openNextCycle(w)}
+                      className={`btn-ghost px-2 py-1 text-xs ${suggestWeeks === w ? '!border-gold-400 !bg-gold-500/10' : ''}`}>{w} weeks later</button>
+                  ))}
+                </div>
+              )}
               <div className="sm:col-span-2">
                 <label className="label">Cycle name</label>
                 <input className="input" autoFocus placeholder="e.g. Transfer Cycle #12" maxLength={80} value={newCycle.name} onChange={(e) => setNewCycle({ ...newCycle, name: e.target.value })} />

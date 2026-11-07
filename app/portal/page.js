@@ -9,7 +9,6 @@ import NameForm from '@/components/NameForm';
 import ResetPassword from '@/components/ResetPassword';
 import { Modal, PageSkeleton } from '@/components/ui';
 
-const RequestsModal = dynamic(() => import('@/components/RequestsModal'), { ssr: false });
 const MembersModal = dynamic(() => import('@/components/MembersModal'), { ssr: false });
 
 export default function Home() {
@@ -19,13 +18,21 @@ export default function Home() {
   const [accessError, setAccessError] = useState('');
   const [pendingCount, setPendingCount] = useState(0);
   const [requestCount, setRequestCount] = useState(0);
-  const [showRequests, setShowRequests] = useState(false);
-  const [reloadKey, setReloadKey] = useState(0);
+  const [nextWaiting, setNextWaiting] = useState([]); // after_date of new "next window" requests
+  const [nextCycleSignal, setNextCycleSignal] = useState(0);
   const [showMembers, setShowMembers] = useState(false);
   const [showName, setShowName] = useState(false);
   const [recovering, setRecovering] = useState(false); // opened a password-reset link from email
   const [name, setName] = useState(null); // null = checking, '' = not chosen yet
   const [toast, setToast] = useState(null);
+
+  // /portal?next-cycle=1 (from the requests page) opens the new-cycle form on the dashboard
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('next-cycle') === '1') {
+      setNextCycleSignal(1);
+      window.history.replaceState(null, '', '/portal');
+    }
+  }, []);
 
   const user = session?.user;
   const userId = user?.id;
@@ -77,8 +84,12 @@ export default function Home() {
   }, [role, loadPending]);
 
   const loadRequests = useCallback(async () => {
-    const { count } = await supabase.from('transfer_requests').select('id', { count: 'exact', head: true }).eq('status', 'new');
-    setRequestCount(count ?? 0);
+    const [all, next] = await Promise.all([
+      supabase.from('transfer_requests').select('id', { count: 'exact', head: true }).eq('status', 'new'),
+      supabase.from('transfer_requests').select('after_date').eq('status', 'new').not('after_date', 'is', null),
+    ]);
+    setRequestCount(all.count ?? 0);
+    setNextWaiting((next.data || []).map((x) => x.after_date));
   }, []);
 
   // Any approved member: count of new public requests, plus a live toast when one arrives
@@ -100,7 +111,6 @@ export default function Home() {
     setRole(null);
     setName(null);
     setShowMembers(false);
-    setShowRequests(false);
     setShowName(false);
     router.replace('/');
   }
@@ -164,18 +174,14 @@ export default function Home() {
       <Dashboard
         isAdmin={role === 'admin'}
         userName={name}
-        reloadKey={reloadKey}
-        requests={{ count: requestCount, onOpen: () => setShowRequests(true) }}
+        nextCycleSignal={nextCycleSignal}
+        requests={{ count: requestCount, nextWaiting }}
         menuItems={[
           { label: 'Members', icon: '👥', onClick: () => setShowMembers(true), badge: role === 'admin' ? pendingCount : 0 },
           { label: 'My name', icon: '✏️', onClick: () => setShowName(true) },
           { label: 'Sign out', icon: '⏻', onClick: signOut, danger: true },
         ]}
       />
-
-      {showRequests && (
-        <RequestsModal notify={notify} onClose={() => setShowRequests(false)} onChanged={loadRequests} onAccepted={() => setReloadKey((k) => k + 1)} />
-      )}
 
       {showMembers && (
         <MembersModal me={user} isAdmin={role === 'admin'} notify={notify} onClose={() => { setShowMembers(false); loadPending(); }} onChanged={loadPending} />
