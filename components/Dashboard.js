@@ -57,6 +57,7 @@ const STATUS_STYLE = {
   Considering: 'text-amber-300 border-amber-500/50 bg-amber-500/10',
   Committed: 'text-emerald-300 border-emerald-500/50 bg-emerald-500/10',
   Rejected: 'text-rose-300 border-rose-500/50 bg-rose-500/10',
+  'Not Coming': 'text-orange-300 border-orange-500/50 bg-orange-500/10',
 };
 const PHASE_LABEL = { upcoming: 'Starts in', ongoing: 'Ongoing · ends in', ended: 'Ended' };
 const PHASE_STYLE = {
@@ -64,13 +65,14 @@ const PHASE_STYLE = {
   ongoing: 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300',
   ended: 'border-slate-500/50 bg-slate-500/10 text-slate-400',
 };
-const STATUS_ICON = { 'Not Contacted': '○', 'In Talks': '◔', Considering: '◑', Committed: '✔', Rejected: '✕' };
+const STATUS_ICON = { 'Not Contacted': '○', 'In Talks': '◔', Considering: '◑', Committed: '✔', Rejected: '✕', 'Not Coming': '⊘' };
 const STAGE_BAR = {
   'Not Contacted': 'bg-slate-500',
   'In Talks': 'bg-sky-500',
   Considering: 'bg-amber-500',
   Committed: 'bg-emerald-500',
   Rejected: 'bg-rose-500',
+  'Not Coming': 'bg-orange-500',
 };
 
 const EMPTY_FORM = {
@@ -444,7 +446,7 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
     const none = { total: 0, committed: 0, power: 0, committedPower: 0 };
     let power = 0, committedPower = 0;
     for (const p of prospects) {
-      if (p.status === 'Rejected') continue;
+      if (p.status === 'Rejected' || p.status === 'Not Coming') continue;
       const tag = (p.assigned_alliance || '').trim();
       const slot = tag ? (map.get(tag) || map.set(tag, { tag, total: 0, committed: 0, power: 0, committedPower: 0 }).get(tag)) : none;
       const pw = Number(p.power) || 0;
@@ -691,7 +693,7 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
             </div>
 
             {/* Status filters */}
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
               {STATUSES.map((s) => (
                 <button key={s} onClick={() => setFStatus(fStatus === s ? '' : s)}
                   title={`${prospects.length ? Math.round((summary.byStatus[s] / prospects.length) * 100) : 0}% of the cycle`}
@@ -712,7 +714,7 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
                       {fInvite && <button className="ml-3 font-normal normal-case tracking-normal text-gold-400 underline" onClick={() => setFInvite('')}>Show all</button>}
                     </h3>
                     {invites.total > 0 && (
-                      <span className="text-xs text-slate-400" title="Rejected prospects do not use a slot">
+                      <span className="text-xs text-slate-400" title="Rejected and Not Coming prospects do not use a slot">
                         <b className="text-sm text-slate-100">{invites.used}</b> of {invites.total} assigned · <b className="text-sm text-emerald-400">{Math.max(0, invites.total - invites.used)}</b> left
                       </span>
                     )}
