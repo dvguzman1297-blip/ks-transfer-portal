@@ -859,7 +859,14 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
                       <td className="whitespace-nowrap px-3 py-2 font-mono text-gold-300">{fmt(p.power)}</td>
                       <td className="whitespace-nowrap px-3 py-2">{p.alliance || '—'}</td>
                       <td className="whitespace-nowrap px-3 py-2 text-gold-300">{p.truegold_grade || '—'}</td>
-                      <td className="whitespace-nowrap px-3 py-2">{p.recruiter || '—'}</td>
+                      <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                        <select value={p.recruiter || ''} onChange={(e) => updateField(p, 'recruiter', e.target.value)}
+                          aria-label={`Recruiter for ${p.ign}`}
+                          className={`rounded-full border border-navy-600 bg-navy-900 px-2 py-1 text-xs outline-none ${p.recruiter ? 'text-slate-100' : 'text-slate-500'}`}>
+                          <option value="" className="bg-navy-900 text-slate-400">—</option>
+                          {recruiters.map((r) => <option key={r} value={r} className="bg-navy-900 text-slate-100">{r}</option>)}
+                        </select>
+                      </td>
                       <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                         <select value={p.assigned_alliance || ''} onChange={(e) => updateField(p, 'assigned_alliance', e.target.value)}
                           aria-label={`Assigned alliance for ${p.ign}`}
