@@ -86,6 +86,41 @@ function download(name, content, type) {
 }
 
 /* ---------- Small components ---------- */
+// Combo box: pick an existing recruiter or type a new one. Saves on pick/Enter/blur.
+// On focus the field empties (current value shown as placeholder) so the list isn't
+// filtered down to the current name. Type "-" to clear the recruiter.
+function RecruiterInput({ value, label, onCommit }) {
+  const [draft, setDraft] = useState(null); // null = not editing
+  const cancelled = useRef(false);
+  const commit = (raw) => {
+    if (cancelled.current) { cancelled.current = false; setDraft(null); return; }
+    const v = raw.trim().slice(0, 60);
+    setDraft(null);
+    if (!v) return;
+    const next = v === '-' || v === '—' ? '' : v;
+    if (next !== value) onCommit(next);
+  };
+  return (
+    <input
+      list="recruiter-options" maxLength={60} aria-label={label}
+      value={draft ?? value} placeholder={value || '—'}
+      onFocus={(e) => {
+        setDraft('');
+        e.target.select();
+        try { e.target.showPicker?.(); } catch { /* not allowed outside a user gesture; typing still shows the list */ }
+      }}
+      onChange={(e) => {
+        setDraft(e.target.value);
+        // picking from the datalist fires a non-typing change event
+        if (e.nativeEvent.inputType === undefined || e.nativeEvent.inputType === 'insertReplacementText') commit(e.target.value);
+      }}
+      onBlur={(e) => commit(e.target.value)}
+      onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { cancelled.current = true; e.currentTarget.blur(); } }}
+      className="w-28 rounded-full border border-navy-600 bg-navy-900 px-3 py-1 text-xs text-slate-100 outline-none placeholder:text-slate-300 focus:border-gold-400"
+    />
+  );
+}
+
 function StatusBadge({ status }) {
   return <span className={`rounded-full border px-2 py-0.5 text-xs ${STATUS_STYLE[status] || ''}`}>{status}</span>;
 }
@@ -833,6 +868,7 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
             </div>
 
             <div className="max-h-[75vh] overflow-auto rounded-lg border border-navy-600">
+              <datalist id="recruiter-options">{recruiters.map((r) => <option key={r} value={r} />)}</datalist>
               <table className="min-w-full text-sm">
                 <thead className="sticky top-0 z-10 bg-navy-900 shadow-[0_1px_0_rgb(var(--navy-600))]">
                   <tr>
@@ -860,12 +896,8 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
                       <td className="whitespace-nowrap px-3 py-2">{p.alliance || '—'}</td>
                       <td className="whitespace-nowrap px-3 py-2 text-gold-300">{p.truegold_grade || '—'}</td>
                       <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-                        <select value={p.recruiter || ''} onChange={(e) => updateField(p, 'recruiter', e.target.value)}
-                          aria-label={`Recruiter for ${p.ign}`}
-                          className={`rounded-full border border-navy-600 bg-navy-900 px-2 py-1 text-xs outline-none ${p.recruiter ? 'text-slate-100' : 'text-slate-500'}`}>
-                          <option value="" className="bg-navy-900 text-slate-400">—</option>
-                          {recruiters.map((r) => <option key={r} value={r} className="bg-navy-900 text-slate-100">{r}</option>)}
-                        </select>
+                        <RecruiterInput value={p.recruiter || ''} label={`Recruiter for ${p.ign}`}
+                          onCommit={(v) => updateField(p, 'recruiter', v)} />
                       </td>
                       <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                         <select value={p.assigned_alliance || ''} onChange={(e) => updateField(p, 'assigned_alliance', e.target.value)}
