@@ -155,6 +155,8 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
   const [looking, setLooking] = useState(false);
   const [refreshing, setRefreshing] = useState(null); // { done, total } while a bulk refresh runs
   const cancelRef = useRef(false);
+  const toastTimer = useRef(null);
+  const [refreshReport, setRefreshReport] = useState(null); // [{ id, name, parts[] }] shown after a refresh that changed something
 
   const [showCycles, setShowCycles] = useState(false);
   const [showAudit, setShowAudit] = useState(false);
@@ -185,7 +187,8 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
 
   const notify = useCallback((msg, type = 'ok') => {
     setToast({ msg, type });
-    setTimeout(() => setToast(null), 4000);
+    clearTimeout(toastTimer.current); // a newer toast must not be closed by an older toast's timer
+    toastTimer.current = setTimeout(() => setToast(null), 3000);
   }, []);
 
   const currentCycle = cycles.find((c) => c.id === cycleId);
@@ -225,6 +228,13 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
   useEffect(() => { loadCycles(); }, [loadCycles]);
 
   useEffect(() => { loadProspects(cycleId); }, [cycleId, loadProspects, reloadKey]);
+
+  // the "updated players" card closes itself after 6 seconds
+  useEffect(() => {
+    if (!refreshReport) return;
+    const t = setTimeout(() => setRefreshReport(null), 6000);
+    return () => clearTimeout(t);
+  }, [refreshReport]);
 
   // Right after a fresh sign-in (flag set by AuthForm), refresh the open cycle's player data once.
   // A page reload or a returning session has no flag, so it does not trigger this.
@@ -346,6 +356,7 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
     cancelRef.current = false;
     setRefreshing({ done: 0, total: list.length });
     let updated = 0, failed = 0, stopped = '', skipped = false;
+    const changes = [];
     for (let i = 0; i < list.length; i++) {
       if (cancelRef.current) { skipped = true; break; }
       const p = list[i];
@@ -357,12 +368,15 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
         if (d.power) patch.power = parsePower(d.power);
         if (d.alliance) patch.alliance = d.alliance;
         if (d.truegoldGrade) patch.truegold_grade = d.truegoldGrade;
-        const changed = Object.keys(patch).filter((k) => patch[k] !== p[k]);
+        const changed = Object.keys(patch).filter((k) => String(patch[k]) !== String(p[k] ?? ''));
         if (changed.length) {
           const { error } = await supabase.from('prospects').update(Object.fromEntries(changed.map((k) => [k, patch[k]]))).eq('id', p.id);
           if (error) throw error;
           setProspects((cur) => cur.map((x) => (x.id === p.id ? { ...x, ...patch } : x)));
           updated++;
+          const show = (k, v) => (v == null || v === '' ? '—' : k === 'power' ? fmtShort(v) : String(v));
+          const label = { ign: 'Name', kingdom: 'Kingdom', power: 'Power', alliance: 'Alliance', truegold_grade: 'TC' };
+          changes.push({ id: p.id, name: patch.ign || p.ign, parts: changed.map((k) => `${label[k]}: ${show(k, p[k])} → ${show(k, patch[k])}`) });
         }
       } catch (err) {
         if (err.status === 429 || err.status === 401 || err.status === 403) { stopped = err.message; break; }
@@ -372,6 +386,7 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
       if (i < list.length - 1) await new Promise((r) => setTimeout(r, 2200));
     }
     setRefreshing(null);
+    if (changes.length) setRefreshReport(changes);
     if (stopped) notify(`Stopped: ${stopped}. ${updated} updated before stopping.`, 'err');
     else if (skipped) notify(`Refresh skipped. ${updated} updated before stopping.`);
     else if (auto && !failed) notify(updated ? `Player info up to date: ${updated} updated` : 'Player info is already up to date');
@@ -1177,8 +1192,25 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
         </div>
       )}
 
+      {refreshReport && (
+        <div role="dialog" aria-label="Updated players" className="fixed bottom-20 right-4 z-[55] w-[calc(100vw-2rem)] max-w-sm rounded-xl border border-gold-500/40 bg-navy-800 shadow-xl shadow-black/40">
+          <div className="flex items-center justify-between gap-3 border-b border-navy-600 px-4 py-2.5">
+            <p className="text-sm font-semibold text-gold-400">Updated {refreshReport.length} player{refreshReport.length === 1 ? '' : 's'}</p>
+            <button type="button" aria-label="Close" className="text-slate-400 hover:text-slate-200" onClick={() => setRefreshReport(null)}>✕</button>
+          </div>
+          <ul className="max-h-64 divide-y divide-navy-600 overflow-auto text-xs">
+            {refreshReport.map((c) => (
+              <li key={c.id} className="px-4 py-2">
+                <p className="font-semibold text-slate-100">{c.name}</p>
+                <p className="text-slate-400">{c.parts.join(' · ')}</p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {toast && (
-        <div role={toast.type === 'err' ? 'alert' : 'status'} aria-live="polite" className={`fixed bottom-4 left-1/2 z-[60] w-[92%] max-w-md -translate-x-1/2 rounded-lg border px-4 py-3 text-sm shadow-xl ${toast.type === 'err' ? 'border-rose-500 bg-rose-950 text-rose-200' : 'border-emerald-500 bg-emerald-950 text-emerald-200'}`}>
+        <div role={toast.type === 'err' ? 'alert' : 'status'} aria-live="polite" className={`fixed bottom-4 right-4 z-[60] w-[calc(100vw-2rem)] max-w-sm rounded-lg border px-4 py-3 text-sm shadow-xl ${toast.type === 'err' ? 'border-rose-500 bg-rose-950 text-rose-200' : 'border-emerald-500 bg-emerald-950 text-emerald-200'}`}>
           {toast.msg}
         </div>
       )}
