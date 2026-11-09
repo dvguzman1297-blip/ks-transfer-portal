@@ -153,6 +153,8 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [looking, setLooking] = useState(false);
+  const [refreshing, setRefreshing] = useState(null); // { done, total } while a bulk refresh runs
+  const cancelRef = useRef(false);
 
   const [showCycles, setShowCycles] = useState(false);
   const [showAudit, setShowAudit] = useState(false);
@@ -223,6 +225,23 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
   useEffect(() => { loadCycles(); }, [loadCycles]);
 
   useEffect(() => { loadProspects(cycleId); }, [cycleId, loadProspects, reloadKey]);
+
+  // Right after a fresh sign-in (flag set by AuthForm), refresh the open cycle's player data once.
+  // A page reload or a returning session has no flag, so it does not trigger this.
+  const runRefreshRef = useRef(null);
+  runRefreshRef.current = runRefresh;
+  useEffect(() => {
+    if (loading || !cycleId) return;
+    let pending = false;
+    try { pending = sessionStorage.getItem('ks_refresh_on_login') === '1'; sessionStorage.removeItem('ks_refresh_on_login'); } catch {}
+    if (!pending) return;
+    if (cycles.find((c) => c.id === cycleId)?.status === 'archived') return;
+    (async () => {
+      const { data } = await supabase.from('prospects').select('*').eq('cycle_id', cycleId);
+      const list = (data || []).filter((p) => p.player_id);
+      if (list.length) runRefreshRef.current(list, { auto: true });
+    })();
+  }, [loading, cycleId, cycles]);
   useEffect(() => { if (showCycles) loadStats(); }, [showCycles, loadStats]);
 
   /* ----- cycles ----- */
@@ -301,19 +320,70 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
   }
 
   /* ----- lookup ----- */
+  async function fetchPlayer(playerId) {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await fetch('/api/lookup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token ?? ''}` },
+      body: JSON.stringify({ playerId }),
+    });
+    const j = await res.json();
+    if (!j.success) { const e = new Error(j.error || 'Lookup failed'); e.status = res.status; throw e; }
+    return j.data || {};
+  }
+
+  /* Re-pull live data (IGN, kingdom, power, alliance, TC level) for every prospect in the open cycle.
+     Paced under the server's 30 lookups/min limit; a field the lookup doesn't return is left as it was. */
+  async function refreshAll() {
+    const list = prospects.filter((p) => p.player_id);
+    if (!list.length) return notify('No prospects to refresh', 'err');
+    const mins = Math.max(1, Math.ceil((list.length * 2.2) / 60));
+    if (!(await ask({ title: `Refresh ${list.length} prospect${list.length === 1 ? '' : 's'}?`, message: `Pulls the latest IGN, kingdom, power, alliance and TC level for everyone in this cycle. Takes about ${mins} min; keep this page open.`, confirmLabel: 'Refresh data' }))) return;
+    await runRefresh(list);
+  }
+
+  async function runRefresh(list, { auto = false } = {}) {
+    cancelRef.current = false;
+    setRefreshing({ done: 0, total: list.length });
+    let updated = 0, failed = 0, stopped = '', skipped = false;
+    for (let i = 0; i < list.length; i++) {
+      if (cancelRef.current) { skipped = true; break; }
+      const p = list[i];
+      try {
+        const d = await fetchPlayer(String(p.player_id));
+        const patch = {};
+        if (d.ign) patch.ign = d.ign;
+        if (d.kingdom) patch.kingdom = parseInt(d.kingdom, 10) || null;
+        if (d.power) patch.power = parsePower(d.power);
+        if (d.alliance) patch.alliance = d.alliance;
+        if (d.truegoldGrade) patch.truegold_grade = d.truegoldGrade;
+        const changed = Object.keys(patch).filter((k) => patch[k] !== p[k]);
+        if (changed.length) {
+          const { error } = await supabase.from('prospects').update(Object.fromEntries(changed.map((k) => [k, patch[k]]))).eq('id', p.id);
+          if (error) throw error;
+          setProspects((cur) => cur.map((x) => (x.id === p.id ? { ...x, ...patch } : x)));
+          updated++;
+        }
+      } catch (err) {
+        if (err.status === 429 || err.status === 401 || err.status === 403) { stopped = err.message; break; }
+        failed++;
+      }
+      setRefreshing({ done: i + 1, total: list.length });
+      if (i < list.length - 1) await new Promise((r) => setTimeout(r, 2200));
+    }
+    setRefreshing(null);
+    if (stopped) notify(`Stopped: ${stopped}. ${updated} updated before stopping.`, 'err');
+    else if (skipped) notify(`Refresh skipped. ${updated} updated before stopping.`);
+    else if (auto && !failed) notify(updated ? `Player info up to date: ${updated} updated` : 'Player info is already up to date');
+    else notify(`Refresh done: ${updated} updated, ${list.length - updated - failed} unchanged${failed ? `, ${failed} failed` : ''}`, failed ? 'err' : undefined);
+    loadProspects(cycleId);
+  }
+
   async function autoLookup() {
     if (!form.player_id.trim()) return notify('Enter a Player ID first', 'err');
     setLooking(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch('/api/lookup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token ?? ''}` },
-        body: JSON.stringify({ playerId: form.player_id.trim() }),
-      });
-      const j = await res.json();
-      if (!j.success) throw new Error(j.error || 'Lookup failed');
-      const d = j.data || {};
+      const d = await fetchPlayer(form.player_id.trim());
       setForm((f) => ({
         ...f,
         ign: d.ign || f.ign,
@@ -805,6 +875,10 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
               </h2>
               <div className="flex flex-wrap gap-2">
                 <button className="btn-blue" onClick={openAdd}>+ Add Prospect</button>
+                <button className="btn-ghost disabled:opacity-60" disabled={!!refreshing} onClick={refreshAll}
+                  title="Re-pull IGN, kingdom, power, alliance and TC level for everyone in this cycle">
+                  {refreshing ? `↻ Refreshing ${refreshing.done}/${refreshing.total}…` : '↻ Refresh data'}
+                </button>
                 <button className="btn-ghost" onClick={exportCSV}>⬇ Export Cycle to CSV</button>
                 <button className="btn-ghost" onClick={() => fileRef.current?.click()}>⬆ Import JSON/CSV</button>
                 <button className="btn-ghost" title="A blank CSV with the right columns and two example rows to fill in, then import"
@@ -1088,6 +1162,20 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
       )}
 
       {confirmDialog}
+
+      {refreshing && (
+        <div role="status" aria-live="polite" className="fixed inset-x-0 top-3 z-[55] mx-auto flex w-[92%] max-w-md items-center gap-3 rounded-xl border border-gold-500/40 bg-navy-800 px-4 py-3 text-sm shadow-xl shadow-black/40">
+          <svg aria-hidden="true" className="h-5 w-5 shrink-0 animate-spin text-gold-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M12 3a9 9 0 1 0 9 9" /></svg>
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold text-slate-100">Pulling updated player information…</p>
+            <p className="text-xs text-slate-400">{refreshing.done} of {refreshing.total} checked. You can keep working.</p>
+            <div className="mt-1.5 h-1 overflow-hidden rounded bg-navy-600">
+              <div className="h-full bg-gold-400 transition-[width]" style={{ width: `${Math.round((refreshing.done / refreshing.total) * 100)}%` }} />
+            </div>
+          </div>
+          <button type="button" className="btn-ghost px-3 py-1 text-xs" onClick={() => { cancelRef.current = true; }}>Skip</button>
+        </div>
+      )}
 
       {toast && (
         <div role={toast.type === 'err' ? 'alert' : 'status'} aria-live="polite" className={`fixed bottom-4 left-1/2 z-[60] w-[92%] max-w-md -translate-x-1/2 rounded-lg border px-4 py-3 text-sm shadow-xl ${toast.type === 'err' ? 'border-rose-500 bg-rose-950 text-rose-200' : 'border-emerald-500 bg-emerald-950 text-emerald-200'}`}>

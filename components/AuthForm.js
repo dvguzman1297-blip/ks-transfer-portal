@@ -25,6 +25,8 @@ export default function AuthForm() {
       if (mode === 'signin') {
       const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
       if (error) throw error;
+      // tells the dashboard to pull fresh player data once for this login
+      try { sessionStorage.setItem('ks_refresh_on_login', '1'); } catch {}
       } else if (mode === 'signup') {
       const { data, error } = await supabase.auth.signUp({ email: email.trim(), password, options: { emailRedirectTo: `${window.location.origin}/portal` } });
       if (error) throw error;
