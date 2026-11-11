@@ -55,6 +55,7 @@ const STATUS_STYLE = {
   'Not Contacted': 'text-slate-300 border-slate-500/50 bg-slate-500/10',
   'In Talks': 'text-sky-300 border-sky-500/50 bg-sky-500/10',
   Considering: 'text-amber-300 border-amber-500/50 bg-amber-500/10',
+  'Invitation Sent': 'text-violet-300 border-violet-500/50 bg-violet-500/10',
   Committed: 'text-emerald-300 border-emerald-500/50 bg-emerald-500/10',
   Rejected: 'text-rose-300 border-rose-500/50 bg-rose-500/10',
   'Not Coming': 'text-orange-300 border-orange-500/50 bg-orange-500/10',
@@ -65,11 +66,12 @@ const PHASE_STYLE = {
   ongoing: 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300',
   ended: 'border-slate-500/50 bg-slate-500/10 text-slate-400',
 };
-const STATUS_ICON = { 'Not Contacted': '○', 'In Talks': '◔', Considering: '◑', Committed: '✔', Rejected: '✕', 'Not Coming': '⊘' };
+const STATUS_ICON = { 'Not Contacted': '○', 'In Talks': '◔', Considering: '◑', 'Invitation Sent': '✉', Committed: '✔', Rejected: '✕', 'Not Coming': '⊘' };
 const STAGE_BAR = {
   'Not Contacted': 'bg-slate-500',
   'In Talks': 'bg-sky-500',
   Considering: 'bg-amber-500',
+  'Invitation Sent': 'bg-violet-500',
   Committed: 'bg-emerald-500',
   Rejected: 'bg-rose-500',
   'Not Coming': 'bg-orange-500',
