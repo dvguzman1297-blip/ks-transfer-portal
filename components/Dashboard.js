@@ -12,7 +12,7 @@ import { Combobox, DashboardSkeleton, Modal, useConfirm } from './ui';
 const AuditLog = dynamic(() => import('./AuditLog'), { ssr: false });
 import {
   INVITE_TYPES, STATUSES, STALE_DAYS, MAX_IMPORT_BYTES, CSV_COLS,
-  isFollowUp, isUnassigned, freshCycle, rangeLabel, cycleCountdown, SLOT_PRESETS, SLOT_FIELDS, slotInt, inviteUsage,
+  isFollowUp, isUnassigned, countsAsCommitted, freshCycle, rangeLabel, cycleCountdown, SLOT_PRESETS, SLOT_FIELDS, slotInt, inviteUsage,
   fmt, parsePower, digits, fmtShort, toCSV, parseCSV, normalizeImportRows, templateCSV, suggestNextCycle, nextCycleNudge,
 } from '@/lib/utils';
 
@@ -57,6 +57,7 @@ const STATUS_STYLE = {
   Considering: 'text-amber-300 border-amber-500/50 bg-amber-500/10',
   'Invitation Sent': 'text-violet-300 border-violet-500/50 bg-violet-500/10',
   Committed: 'text-emerald-300 border-emerald-500/50 bg-emerald-500/10',
+  Transferred: 'text-teal-300 border-teal-500/50 bg-teal-500/10',
   Rejected: 'text-rose-300 border-rose-500/50 bg-rose-500/10',
   'Not Coming': 'text-orange-300 border-orange-500/50 bg-orange-500/10',
 };
@@ -66,13 +67,14 @@ const PHASE_STYLE = {
   ongoing: 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300',
   ended: 'border-slate-500/50 bg-slate-500/10 text-slate-400',
 };
-const STATUS_ICON = { 'Not Contacted': '○', 'In Talks': '◔', Considering: '◑', 'Invitation Sent': '✉', Committed: '✔', Rejected: '✕', 'Not Coming': '⊘' };
+const STATUS_ICON = { 'Not Contacted': '○', 'In Talks': '◔', Considering: '◑', 'Invitation Sent': '✉', Committed: '✔', Transferred: '⇄', Rejected: '✕', 'Not Coming': '⊘' };
 const STAGE_BAR = {
   'Not Contacted': 'bg-slate-500',
   'In Talks': 'bg-sky-500',
   Considering: 'bg-amber-500',
   'Invitation Sent': 'bg-violet-500',
   Committed: 'bg-emerald-500',
+  Transferred: 'bg-teal-500',
   Rejected: 'bg-rose-500',
   'Not Coming': 'bg-orange-500',
 };
@@ -222,7 +224,7 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
     for (const p of data) {
       const o = (s[p.cycle_id] ||= { total: 0, committed: 0, power: 0 });
       o.total++;
-      if (p.status === 'Committed') { o.committed++; o.power += Number(p.power) || 0; }
+      if (countsAsCommitted(p.status)) { o.committed++; o.power += Number(p.power) || 0; }
     }
     setCycleStats(s);
   }, []);
@@ -538,7 +540,7 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
       const slot = tag ? (map.get(tag) || map.set(tag, { tag, total: 0, committed: 0, power: 0, committedPower: 0 }).get(tag)) : none;
       const pw = Number(p.power) || 0;
       slot.total++; slot.power += pw; power += pw;
-      if (p.status === 'Committed') { slot.committed++; slot.committedPower += pw; committedPower += pw; }
+      if (countsAsCommitted(p.status)) { slot.committed++; slot.committedPower += pw; committedPower += pw; }
     }
     return { rows: [...map.values()].sort((a, b) => b.power - a.power || a.tag.localeCompare(b.tag)), none, power, committedPower };
   }, [prospects]);
@@ -547,17 +549,17 @@ export default function Dashboard({ menuItems = [], isAdmin = false, userName = 
 
   const summary = useMemo(() => {
     const byStatus = Object.fromEntries(STATUSES.map((s) => [s, 0]));
-    let power = 0, followUp = 0, unassigned = 0;
+    let power = 0, committed = 0, followUp = 0, unassigned = 0;
     const staleBefore = Date.now() - STALE_DAYS * 86400000;
     for (const p of prospects) {
       byStatus[p.status] = (byStatus[p.status] || 0) + 1;
-      if (p.status === 'Committed') {
+      if (countsAsCommitted(p.status)) {
+        committed++;
         power += Number(p.power) || 0;
       }
       if (isFollowUp(p, staleBefore)) followUp++;
       if (isUnassigned(p)) unassigned++;
     }
-    const committed = byStatus.Committed;
     return { byStatus, power, committed, avg: committed ? Math.round(power / committed) : 0, followUp, unassigned };
   }, [prospects]);
 

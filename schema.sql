@@ -24,7 +24,7 @@ create table if not exists kstransfers.prospects (
   role text,
   recruiter text,
   status text not null default 'Not Contacted'
-    check (status in ('Not Contacted','In Talks','Considering','Invitation Sent','Committed','Rejected','Not Coming')),
+    check (status in ('Not Contacted','In Talks','Considering','Invitation Sent','Committed','Transferred','Rejected','Not Coming')),
   alliance text,
   truegold_grade text,
   notes text,
